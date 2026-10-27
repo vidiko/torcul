@@ -1,0 +1,71 @@
+# SPDX-FileCopyrightText: 2026 Lusoris <lusoris@pm.me>
+# SPDX-License-Identifier: EUPL-1.2
+#
+# REUSE (https://reuse.software) annotations for files that cannot carry a
+# header of their own. Run `reuse lint` to verify.
+
+version = 1
+
+# The root licence text and files that cannot carry a header of their own.
+[[annotations]]
+path = ["LICENSE", ".gitignore", "README.md"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Lusoris <lusoris@pm.me>"
+SPDX-License-Identifier = "EUPL-1.2"
+
+# Written by `praetorctl adopt` and held in step by `praetorctl audit`.
+# "closest" keeps the terms a generated file states itself.
+[[annotations]]
+path = [
+    ".agents/**",
+    ".claude/**",
+    ".codex/**",
+    ".config/**",
+    ".cursor/**",
+    ".devcontainer/**",
+    ".fleet/**",
+    ".gemini/**",
+    ".github/**",
+    ".helix/**",
+    ".idea/**",
+    ".paperclip/**",
+    ".vscode/**",
+    ".zed/**",
+    "docs/**",
+    "lua/**",
+    ".clang-tidy",
+    ".dir-locals.el",
+    ".editorconfig",
+    ".gitattributes",
+    ".nvim.lua",
+    ".standards-baseline.json",
+    ".standards.lock",
+    ".standards.yaml",
+    ".windsurfrules",
+    "AGENTS.md",
+    "AGENTS.readonly.md",
+    "CLAUDE.md",
+    "CONTRIBUTING.md",
+    "Makefile",
+    "SECURITY.md",
+    "lefthook.yml",
+    "standards.sublime-project",
+]
+precedence = "closest"
+SPDX-FileCopyrightText = "2026 Lusoris <lusoris@pm.me>"
+SPDX-License-Identifier = "EUPL-1.2"
+
+# Register skills adapted from MIT-licensed upstream work. The upstream
+# notices are the LICENSE file in each skill directory; these tables add that
+# licence and its copyright holders to the EUPL-1.2 adaptation.
+[[annotations]]
+path = [".agents/skills/adhd-format/**", ".claude/skills/adhd-format/**", ".agents/skills/social-text/**", ".claude/skills/social-text/**"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Ayoub Ghriss"
+SPDX-License-Identifier = "MIT"
+
+[[annotations]]
+path = [".agents/skills/caveman/**", ".claude/skills/caveman/**"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Julius Brussee"
+SPDX-License-Identifier = "MIT"

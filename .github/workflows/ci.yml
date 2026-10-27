@@ -1,0 +1,112 @@
+# SPDX-FileCopyrightText: 2026 Lusoris <lusoris@pm.me>
+# SPDX-License-Identifier: EUPL-1.2
+---
+# Verification gate: runs `make verify-all`, the same target a contributor
+# runs locally, and checks that every commit carries a sign-off. It is the
+# required status check of the main ruleset, next to the local hooks.
+#
+# The job runs on a hosted runner until a cluster runner scale set exists for
+# this repository. The standards engine is built here from one pinned commit
+# of its public repository; no released binary and no moving branch is
+# trusted.
+name: Verification gate
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Published Praetor commit that builds the praetorctl this gate pins. The
+  # name is the one the engine's hook launcher reads
+  # (.config/lefthook/engine.sh), so the local hooks and `make verify-all`
+  # run this same commit and not whatever praetorctl is on PATH.
+  PRAETOR_REF: "96e22a033467109d559054bbc31dab9889fba5aa"
+
+jobs:
+  verify:
+    name: Verification gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Stop on a draft pull request
+        if: github.event.pull_request.draft == true
+        shell: bash
+        env:
+          TITLE: Gate not run on a draft
+          MESSAGE: >-
+            The gate did not run because the pull request is a draft.
+            It runs when the pull request is marked ready for review.
+        run: |
+          echo "::error title=$TITLE::$MESSAGE"
+          echo "$MESSAGE" >> "$GITHUB_STEP_SUMMARY"
+          exit 1
+
+      # Full history: the sign-off step reads every commit of the pull request.
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check out pinned Praetor source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: cordanaLLM/praetor
+          ref: ${{ env.PRAETOR_REF }}
+          path: praetor-src
+          persist-credentials: false
+
+      - name: Set up the Go toolchain declared by Praetor
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: praetor-src/go.mod
+          cache: false
+
+      - name: Build pinned praetorctl from the published Praetor commit
+        env:
+          GOTOOLCHAIN: local
+          CGO_ENABLED: "0"
+          GOFLAGS: -mod=readonly
+        run: |
+          test "$(git -C praetor-src rev-parse HEAD)" = "$PRAETOR_REF"
+          mkdir -p "$RUNNER_TEMP/bin"
+          # go vet first: the Go compiler has no warnings, so vet is the
+          # warnings-as-errors form for the one Go build this gate runs.
+          ( cd praetor-src && go mod download && go mod verify \
+            && go vet ./... \
+            && go build -trimpath -buildvcs=false \
+              -o "$RUNNER_TEMP/bin/praetorctl" ./cmd/standardsctl )
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          # The Praetor checkout is a build input only; the audit must not
+          # read it as content of this repository.
+          rm -rf praetor-src
+
+      # PRAETORCTL names the binary built above. Without it the Makefile
+      # asks the hook launcher, which would install the pinned commit a
+      # second time through the Go module proxy.
+      - name: Verification gate
+        run: make verify-all PRAETORCTL="$RUNNER_TEMP/bin/praetorctl"
+
+      - name: Sign-off on pull request commits
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          missing=0
+          for sha in $(git rev-list --no-merges "$BASE_SHA..$HEAD_SHA"); do
+            if ! git log -1 --format=%B "$sha" | grep -q '^Signed-off-by: '; then
+              echo "::error::commit $sha lacks a Signed-off-by trailer"
+              missing=1
+            fi
+          done
+          exit "$missing"
