@@ -1,0 +1,153 @@
+{
+  "host": {
+    "cpu_set": "0-7",
+    "nproc": 32,
+    "kernel": "7.3.4-1-cachyos",
+    "loadavg_start": [
+      33.96435546875,
+      29.57568359375,
+      30.4482421875
+    ],
+    "ffmpeg": "ffmpeg version n9.0.2 Copyright (c) 2000-2026 the FFmpeg developers",
+    "svt": "SVT-AV1 v4.2.0 (release)",
+    "x265": "x265 [info]: HEVC encoder version 4.3",
+    "dav1d": "1.5.4",
+    "gstreamer": "gst-launch-1.0 version 1.28.9",
+    "mkvmerge": "mkvmerge v103.0 ('The Darkness') 64-bit",
+    "loadavg_end": [
+      52.23876953125,
+      37.18017578125,
+      33.08447265625
+    ]
+  },
+  "rows": [
+    {
+      "wall_s": 0.821,
+      "cpu_s": 0.52,
+      "max_rss_mib": 52.211,
+      "case": "M1 ffprobe, one process per file",
+      "runs": 5,
+      "files": 11
+    },
+    {
+      "wall_s": 5.221,
+      "cpu_s": 4.073,
+      "max_rss_mib": 269.043,
+      "case": "M1 gst-discoverer, one process per file",
+      "runs": 5,
+      "files": 11
+    },
+    {
+      "wall_s": 0.122,
+      "cpu_s": 0.073,
+      "max_rss_mib": 52.156,
+      "case": "M1 libavformat in process (ffmpeg-next)",
+      "runs": 5,
+      "files": 11
+    },
+    {
+      "wall_s": 0.305,
+      "cpu_s": 0.187,
+      "max_rss_mib": 65.297,
+      "case": "M2 ffmpeg -c copy, policy tracks",
+      "runs": 3
+    },
+    {
+      "wall_s": 0.263,
+      "cpu_s": 0.139,
+      "max_rss_mib": 61.449,
+      "case": "M2 libavformat in process, policy tracks",
+      "runs": 3
+    },
+    {
+      "wall_s": 0.265,
+      "cpu_s": 0.156,
+      "max_rss_mib": 76.02,
+      "case": "M2 mkvmerge, policy tracks",
+      "runs": 3
+    },
+    {
+      "wall_s": 0.265,
+      "cpu_s": 0.154,
+      "max_rss_mib": 59.723,
+      "case": "M2 ffmpeg -c copy, video + 2 audio",
+      "runs": 3
+    },
+    {
+      "wall_s": 0.374,
+      "cpu_s": 0.286,
+      "max_rss_mib": 17.07,
+      "case": "M2 gst-launch remux, video + 2 audio",
+      "runs": 3
+    },
+    {
+      "wall_s": 2.782,
+      "cpu_s": 10.752,
+      "max_rss_mib": 1631.734,
+      "case": "M3 AV1 SvtAv1EncApp preset 8 crf 35",
+      "runs": 3
+    },
+    {
+      "wall_s": 3.357,
+      "cpu_s": 11.426,
+      "max_rss_mib": 1748.293,
+      "case": "M3 AV1 ffmpeg libsvtav1 preset 8 crf 35",
+      "runs": 3
+    },
+    {
+      "wall_s": 2.739,
+      "cpu_s": 11.001,
+      "max_rss_mib": 2167.52,
+      "case": "M4 AV1 gst svtav1enc preset 8 crf 35",
+      "runs": 3
+    },
+    {
+      "wall_s": 6.094,
+      "cpu_s": 19.086,
+      "max_rss_mib": 812.094,
+      "case": "M3 HEVC x265 preset fast crf 28",
+      "runs": 3
+    },
+    {
+      "wall_s": 4.617,
+      "cpu_s": 18.021,
+      "max_rss_mib": 906.02,
+      "case": "M3 HEVC ffmpeg libx265 preset fast crf 28",
+      "runs": 3
+    },
+    {
+      "wall_s": 5.55,
+      "cpu_s": 17.828,
+      "max_rss_mib": 904.129,
+      "case": "M4 HEVC gst x265enc preset fast crf 28",
+      "runs": 3
+    },
+    {
+      "wall_s": 0.427,
+      "cpu_s": 0.902,
+      "max_rss_mib": 68.824,
+      "case": "M3 AV1 decode dav1d",
+      "runs": 3
+    },
+    {
+      "wall_s": 0.509,
+      "cpu_s": 0.994,
+      "max_rss_mib": 119.84,
+      "case": "M3 AV1 decode ffmpeg libdav1d",
+      "runs": 3
+    }
+  ],
+  "sizes_bytes": {
+    "svt_cli.ivf": 6246344,
+    "svt_ff.ivf": 6246344,
+    "svt_gst.mkv": 6245741,
+    "x265_cli.hevc": 5682920,
+    "x265_ff.hevc": 5682950,
+    "x265_gst.mkv": 5621523,
+    "ff.mkv": 93949028,
+    "ff_av.mkv": 93943291,
+    "gst_av.mkv": 93943214,
+    "inproc.mkv": 93948849,
+    "mkvmerge.mkv": 93904067
+  }
+}
