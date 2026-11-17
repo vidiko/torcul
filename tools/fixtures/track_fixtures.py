@@ -1,7 +1,19 @@
 # SPDX-FileCopyrightText: 2026 Lusoris <lusoris@pm.me>
 # SPDX-License-Identifier: EUPL-1.2
-"""Generate the synthetic track-policy fixture set and its expected plans.
+"""Generate the synthetic track-policy fixture set and its expected plans."""
 
+# subprocess runs argument lists only, never a shell (run).
+import hashlib
+import json
+import os
+import pathlib
+import secrets
+import shutil
+import subprocess  # nosec B404  # nosemgrep
+import sys
+import tempfile
+
+USAGE = """\
 Every fixture is generated from FFmpeg's lavfi test sources, so the set has no
 third-party media and no licence of its own. The manifest written beside the
 files is the oracle for the track policy of praetor-decided-media-track-policy:
@@ -24,17 +36,6 @@ manifest names the generator's SHA-256, so a reader can tell a stale set.
 Requires the ffmpeg binary on PATH. Exit 0 on success, 2 on a usage error,
 1 when an ffmpeg call fails or times out or <out-dir> cannot be replaced.
 """
-
-import hashlib
-import json
-import os
-import pathlib
-import secrets
-import shutil
-# subprocess runs argument lists only, never a shell (run).
-import subprocess  # nosec B404  # nosemgrep
-import sys
-import tempfile
 
 FFMPEG_TIMEOUT_S = 600  # HISS-02: deadline for one ffmpeg call
 SMALL = {"size": "320x180", "seconds": 2}
@@ -275,11 +276,9 @@ def write_manifest(staging, fixtures):
 
 
 def restore(previous, out_dir, holder, cause):
-    """Put the previous set back after a failed swap, then drop the holder only if it is empty.
-
-    When the set cannot be moved back, or the holder still holds anything, the holder stays on disk and
-    the error names it, so a failed publish never deletes the previous set.
-    """
+    """Put the previous set back after a failed swap, then drop the holder only if it is empty."""
+    # When the set cannot be moved back, or the holder still holds anything, the holder stays on disk and
+    # the error names it, so a failed publish never deletes the previous set.
     try:
         if os.path.lexists(previous) and not os.path.lexists(out_dir):
             os.rename(previous, out_dir)
@@ -323,7 +322,7 @@ def generate(staging, fixtures, geometry):
 def main(argv):
     """Entry point; returns the process exit code."""
     if len(argv) not in (2, 3) or (len(argv) == 3 and argv[2] != "--large"):
-        print(__doc__, file=sys.stderr)
+        print(__doc__ + "\n\n" + USAGE, file=sys.stderr)
         return 2
     if shutil.which("ffmpeg") is None:
         print("track_fixtures: ffmpeg not on PATH", file=sys.stderr)

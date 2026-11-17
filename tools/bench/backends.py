@@ -1,7 +1,24 @@
 # SPDX-FileCopyrightText: 2026 Lusoris <lusoris@pm.me>
 # SPDX-License-Identifier: EUPL-1.2
-"""Measure pipeline backend options for ADR-0002 on this host.
+"""Measure pipeline backend options for ADR-0002 on this host."""
 
+# subprocess runs argument lists only, never a shell (run_tool, measure).
+import contextlib
+import fcntl
+import hashlib
+import json
+import os
+import pathlib
+import platform
+import shutil
+import signal
+import statistics
+import subprocess  # nosec B404  # nosemgrep
+import sys
+import tempfile
+import time
+
+USAGE = """\
 Compares, for the same input and settings, the direct codec command-line
 tools (SvtAv1EncApp, x265, dav1d), FFmpeg's libav* wrappers (ffmpeg,
 ffprobe) and GStreamer (gst-launch-1.0, gst-discoverer-1.0), plus mkvmerge
@@ -24,22 +41,6 @@ ones used. --cases probe runs only the probe rows. One run at a time holds
 Exit 0 when every case ran, 1 when a case failed, 2 on a usage error.
 """
 
-import contextlib
-import fcntl
-import hashlib
-import json
-import os
-import pathlib
-import platform
-import shutil
-import signal
-import statistics
-# subprocess runs argument lists only, never a shell (run_tool, measure).
-import subprocess  # nosec B404  # nosemgrep
-import sys
-import tempfile
-import time
-
 CASE_TIMEOUT_S = 900  # HISS-02: deadline per measured command
 POLL_S = 0.02
 MAX_POLLS = int(CASE_TIMEOUT_S / POLL_S) + 1
@@ -59,11 +60,11 @@ def tool(args):
     return [exe] + list(args[1:])
 
 
-def run_tool(args, **kwargs):
+def run_tool(args, *, check, timeout, **kwargs):
     """Run one argument list through tool(); every caller passes a timeout (HISS-02)."""
     # The list comes from constants of this file and its own paths; tool() resolves the program by name and
     # no shell runs, so the bandit and semgrep subprocess audit rules do not apply on this line.
-    return subprocess.run(tool(args), **kwargs)  # nosec B603  # nosemgrep
+    return subprocess.run(tool(args), check=check, timeout=timeout, **kwargs)  # nosec B603  # nosemgrep
 
 
 def stop_group(child):
@@ -75,12 +76,10 @@ def stop_group(child):
 
 
 def measure(args, stdout_path=None):
-    """Run one command pinned to CPUS; return wall, cpu seconds and peak RSS in MiB.
-
-    The command runs in its own session, so a timeout kills every process it
-    started. stderr goes to an anonymous file, so a chatty command never
-    blocks on a full pipe.
-    """
+    """Run one command pinned to CPUS; return wall, cpu seconds and peak RSS in MiB."""
+    # The command runs in its own session, so a timeout kills every process it
+    # started. stderr goes to an anonymous file, so a chatty command never
+    # blocks on a full pipe.
     with contextlib.ExitStack() as stack:
         sink = stack.enter_context(open(stdout_path, "wb")) if stdout_path else subprocess.DEVNULL
         err_file = stack.enter_context(tempfile.TemporaryFile())
@@ -156,11 +155,9 @@ def fixture_names(out_dir):
 
 
 def complete_y4m(path):
-    """Whether path is a whole cached raw input: one 1080p 4:2:0 header, RAW_FRAMES frames, nothing more.
-
-    The size must equal the header plus RAW_FRAMES full frames exactly, and every frame must start with
-    its FRAME marker, so a file cut anywhere (header, marker or payload) is regenerated, never reused.
-    """
+    """Whether path is a whole cached raw input: one 1080p 4:2:0 header, RAW_FRAMES frames, nothing more."""
+    # The size must equal the header plus RAW_FRAMES full frames exactly, and every frame must start with
+    # its FRAME marker, so a file cut anywhere (header, marker or payload) is regenerated, never reused.
     if path.is_symlink() or not path.is_file():
         return False
     with path.open("rb") as stream:
@@ -207,12 +204,10 @@ def fixture_set(out_dir, extra):
 
 
 def probe_cases(small, inproc):
-    """M1: per-file probe cost, process per file versus one in-process probe of all files.
-
-    The in-process probe prints index, medium, codec id and language per
-    stream; the second ffprobe row prints the same four fields, so it does the
-    same work, while the first row also serialises every other stream field.
-    """
+    """M1: per-file probe cost, process per file versus one in-process probe of all files."""
+    # The in-process probe prints index, medium, codec id and language per
+    # stream; the second ffprobe row prints the same four fields, so it does the
+    # same work, while the first row also serialises every other stream field.
     files = fixture_names(small)
     if not files:
         raise RuntimeError(f"no current fixture manifest in {small}")
@@ -318,7 +313,7 @@ def main(argv):
     known = {"--inproc-probe", "--inproc-remux", "--cases"}
     cases = options.get("--cases", "all")
     if len(argv) < 3 or len(argv) % 2 == 0 or set(options) - known or cases not in ("all", "probe"):
-        print(__doc__, file=sys.stderr)
+        print(__doc__ + "\n\n" + USAGE, file=sys.stderr)
         return 2
     work = pathlib.Path(argv[1])
     work.mkdir(parents=True, exist_ok=True)
