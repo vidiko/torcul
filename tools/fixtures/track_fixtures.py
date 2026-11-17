@@ -301,6 +301,8 @@ def publish(staging, out_dir):
     try:
         if os.path.lexists(out_dir):
             os.rename(out_dir, previous)
+            if not replaceable(previous):
+                raise OSError(f"refusing {out_dir}: displaced set is no longer replaceable")
         os.rename(staging, out_dir)
     except BaseException as exc:
         restore(previous, out_dir, holder, exc)

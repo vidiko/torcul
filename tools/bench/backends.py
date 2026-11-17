@@ -68,10 +68,13 @@ def run_tool(args, *, check, timeout, **kwargs):
 
 
 def stop_group(child):
-    """Kill the timed-out child's whole process group, then reap the child."""
-    pgid = os.getpgid(child.pid)
-    if pgid > 1 and pgid == child.pid:  # HISS-08: never signal group 0, 1 or our own
-        os.killpg(pgid, signal.SIGKILL)
+    """Kill the unfinished child's whole process group, then reap the child."""
+    try:
+        pgid = os.getpgid(child.pid)
+        if pgid > 1 and pgid == child.pid and pgid != os.getpgrp():  # HISS-08: exclude our group
+            os.killpg(pgid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass  # The child may have exited and been reaped before cleanup.
     child.wait(timeout=10)
 
 
@@ -87,14 +90,22 @@ def measure(args, stdout_path=None):
         start = time.monotonic()
         # argv is a case list from this file, resolved by tool(); no shell (see run_tool).
         child = subprocess.Popen(argv, stdout=sink, stderr=err_file, start_new_session=True)  # nosec B603  # nosemgrep
-        for _ in range(MAX_POLLS):
-            pid, status, usage = os.wait4(child.pid, os.WNOHANG)
-            if pid:
-                break
-            time.sleep(POLL_S)
-        else:
-            stop_group(child)
-            raise RuntimeError(f"timeout after {CASE_TIMEOUT_S} s: {args}")
+        pid = 0
+        try:
+            for _ in range(MAX_POLLS):
+                pid, status, usage = os.wait4(child.pid, os.WNOHANG)
+                if pid:
+                    break
+                time.sleep(POLL_S)
+            else:
+                raise RuntimeError(f"timeout after {CASE_TIMEOUT_S} s: {args}")
+        except BaseException as exc:
+            if not pid:
+                try:
+                    stop_group(child)
+                except BaseException as cleanup:
+                    raise exc from cleanup
+            raise
         wall = time.monotonic() - start
         child.returncode = os.waitstatus_to_exitcode(status)
         err_file.seek(0)
@@ -294,20 +305,24 @@ def sizes(work):
     return {p.name: p.stat().st_size for p in found}
 
 
-def host_facts():
-    """Host and tool versions the numbers depend on."""
+def host_facts(cases="all"):
+    """Host and tool versions the selected cases depend on."""
     def first_line(args):
         result = run_tool(args, capture_output=True, timeout=60, check=False)
         text = (result.stdout or result.stderr).decode(errors="replace").strip()
         return text.splitlines()[0] if text else ""
-    return {"cpu_set": CPUS, "nproc": os.cpu_count(), "kernel": platform.release(),
-            "loadavg_start": os.getloadavg(),
-            "ffmpeg": first_line(["ffmpeg", "-hide_banner", "-version"]),
-            "svt": first_line(["SvtAv1EncApp", "--version"]),
-            "x265": first_line(["x265", "--version"]),
-            "dav1d": first_line(["dav1d", "--version"]),
-            "gstreamer": first_line(["gst-launch-1.0", "--version"]),
-            "mkvmerge": first_line(["mkvmerge", "--version"])}
+    facts = {"cpu_set": CPUS, "nproc": os.cpu_count(), "kernel": platform.release(),
+             "loadavg_start": os.getloadavg(),
+             "ffmpeg": first_line(["ffmpeg", "-hide_banner", "-version"])}
+    if cases == "all":
+        facts.update({"svt": first_line(["SvtAv1EncApp", "--version"]),
+                      "x265": first_line(["x265", "--version"]),
+                      "dav1d": first_line(["dav1d", "--version"]),
+                      "gstreamer": first_line(["gst-launch-1.0", "--version"]),
+                      "mkvmerge": first_line(["mkvmerge", "--version"])})
+    facts.update({"ffprobe": first_line(["ffprobe", "-version"]),
+                  "gst-discoverer-1.0": first_line(["gst-discoverer-1.0", "--gst-version"])})
+    return facts
 
 
 def main(argv):
@@ -322,7 +337,7 @@ def main(argv):
     work.mkdir(parents=True, exist_ok=True)
     try:
         lock = lock_work(work)
-        facts = host_facts()
+        facts = host_facts(cases)
         rows = probe_cases(fixture_set(work / "small", []), options.get("--inproc-probe"))
         if cases == "all":
             large = fixture_set(work / "large", ["--large"]) / "f01_movie_en_de_extra.mkv"

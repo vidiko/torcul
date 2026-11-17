@@ -3,6 +3,7 @@
 """Check interrupted input generation, fixture publication and lock acquisition."""
 
 import importlib.util
+import json
 import os
 import tempfile
 import unittest
@@ -98,6 +99,7 @@ class PublishTests(unittest.TestCase):
             if previous:
                 out_dir.mkdir()
                 (out_dir / "content").write_bytes(b"previous")
+                (out_dir / "manifest.json").write_text(json.dumps({"policy": FIXTURES.POLICY}))
             rename = os.rename
 
             def fail_staging(source, destination):
@@ -141,6 +143,7 @@ class PublishTests(unittest.TestCase):
             out_dir = root / "output"
             out_dir.mkdir()
             (out_dir / "content").write_bytes(b"previous")
+            (out_dir / "manifest.json").write_text(json.dumps({"policy": FIXTURES.POLICY}))
             staging = root / "staging"
             staging.mkdir()
             (staging / "content").write_bytes(b"new")
