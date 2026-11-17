@@ -17,7 +17,9 @@ Usage:
 --large writes the bench variant (1920x1080, 120 s) of the first fixture only.
 The set is built in a private staging directory beside <out-dir> and swapped
 in only when every file and the manifest are written, so a failed or
-interrupted run leaves the previous set as it was. An existing <out-dir> is
+interrupted run leaves the previous set as it was. If the swap fails and the
+previous set cannot be moved back, it stays in the `.<name>.old-*` directory
+beside <out-dir> and the error names that directory. An existing <out-dir> is
 replaced only when it is empty or holds a manifest of this generator; the
 manifest names the generator's SHA-256, so a reader can tell a stale set.
 Requires the ffmpeg binary on PATH. Exit 0 on success, 2 on a usage error,
@@ -268,6 +270,21 @@ def write_manifest(staging, fixtures):
         handle.write(json.dumps(manifest, indent=2) + "\n")
 
 
+def restore(previous, out_dir, holder, cause):
+    """
+    Put the previous set back after a failed swap, then drop the holder only if it is empty.
+
+    When the set cannot be moved back, or the holder still holds anything, the holder stays on disk and
+    the error names it, so a failed publish never deletes the previous set.
+    """
+    try:
+        if os.path.lexists(previous) and not os.path.lexists(out_dir):
+            os.rename(previous, out_dir)
+        os.rmdir(holder)  # removes only an empty directory
+    except OSError as err:
+        raise OSError(f"publish failed and the previous set stays under {holder}: {err}") from cause
+
+
 def publish(staging, out_dir):
     """Swap the finished staging directory in for out_dir, then delete the previous set."""
     mask = os.umask(0)
@@ -279,12 +296,10 @@ def publish(staging, out_dir):
         if os.path.lexists(out_dir):
             os.rename(out_dir, previous)
         os.rename(staging, out_dir)
-    except OSError:
-        if os.path.lexists(previous) and not os.path.lexists(out_dir):
-            os.rename(previous, out_dir)
+    except OSError as exc:
+        restore(previous, out_dir, holder, exc)
         raise
-    finally:
-        shutil.rmtree(holder)
+    shutil.rmtree(holder)
 
 
 def generate(staging, fixtures, geometry):

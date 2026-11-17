@@ -47,6 +47,7 @@ CPUS = "0-7"  # every case gets the same eight logical CPUs
 REPEATS = 3
 RAW_FRAMES = 240
 RAW_FRAME_BYTES = 1920 * 1080 * 3 // 2 + len(b"FRAME\n")  # one 4:2:0 8-bit Y4M frame
+Y4M_HEADER_MAX = 256  # bytes read for the stream header line; ffmpeg writes about 60
 FIXTURES = pathlib.Path(__file__).resolve().parent.parent / "fixtures" / "track_fixtures.py"
 
 
@@ -147,10 +148,37 @@ def fixture_names(out_dir):
     return [str(out_dir / name) for name in names]
 
 
+def complete_y4m(path):
+    """
+    Whether path is a whole cached raw input: one 1080p 4:2:0 header, RAW_FRAMES frames, nothing more.
+
+    The size must equal the header plus RAW_FRAMES full frames exactly, and every frame must start with
+    its FRAME marker, so a file cut anywhere (header, marker or payload) is regenerated, never reused.
+    """
+    if path.is_symlink() or not path.is_file():
+        return False
+    with path.open("rb") as stream:
+        header = stream.readline(Y4M_HEADER_MAX)
+        tokens = header.split()
+        if not header.endswith(b"\n") or tokens[:1] != [b"YUV4MPEG2"]:
+            return False
+        if b"W1920" not in tokens or b"H1080" not in tokens:
+            return False
+        if any(t.startswith(b"C") and not t.startswith(b"C420") for t in tokens[1:]):
+            return False
+        if path.stat().st_size != len(header) + RAW_FRAMES * RAW_FRAME_BYTES:
+            return False
+        for frame in range(RAW_FRAMES):
+            stream.seek(len(header) + frame * RAW_FRAME_BYTES)
+            if stream.read(len(b"FRAME\n")) != b"FRAME\n":
+                return False
+    return True
+
+
 def raw_input(work):
     """The raw encode input; generated under a temporary name and renamed once complete."""
     raw = work / f"src_1080p_{RAW_FRAMES}f.y4m"
-    if raw.is_file() and raw.stat().st_size > RAW_FRAMES * RAW_FRAME_BYTES:
+    if complete_y4m(raw):
         return raw
     partial = work / (raw.name + ".partial")
     try:
