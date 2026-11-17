@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Lusoris <lusoris@pm.me>
 # SPDX-License-Identifier: EUPL-1.2
-"""Generate the synthetic track-policy fixture set and its expected plans.
+"""
+Generate the synthetic track-policy fixture set and its expected plans.
 
 Every fixture is generated from FFmpeg's lavfi test sources, so the set has no
 third-party media and no licence of its own. The manifest written beside the
@@ -14,19 +15,28 @@ Usage:
     python3 -I tools/fixtures/track_fixtures.py <out-dir> [--large]
 
 --large writes the bench variant (1920x1080, 120 s) of the first fixture only.
+The set is built in a private staging directory beside <out-dir> and swapped
+in only when every file and the manifest are written, so a failed or
+interrupted run leaves the previous set as it was. An existing <out-dir> is
+replaced only when it is empty or holds a manifest of this generator; the
+manifest names the generator's SHA-256, so a reader can tell a stale set.
 Requires the ffmpeg binary on PATH. Exit 0 on success, 2 on a usage error,
-1 when an ffmpeg call fails or times out.
+1 when an ffmpeg call fails or times out or <out-dir> cannot be replaced.
 """
 
+import hashlib
 import json
+import os
 import pathlib
 import shutil
 import subprocess
 import sys
+import tempfile
 
 FFMPEG_TIMEOUT_S = 600  # HISS-02: deadline for one ffmpeg call
 SMALL = {"size": "320x180", "seconds": 2}
 LARGE = {"size": "1920x1080", "seconds": 120}
+POLICY = "praetor-decided-media-track-policy"
 
 # One row per track after the video stream: (kind, language, title, dispositions).
 # kind: a = audio, s = subtitle, t = attachment (font), c = cover image attachment.
@@ -135,7 +145,10 @@ FIXTURES = [
 
 def run(args):
     """Run one ffmpeg argument list under the deadline; raise on failure."""
-    subprocess.run(args, check=True, timeout=FFMPEG_TIMEOUT_S,
+    exe = shutil.which(args[0])
+    if exe is None:
+        raise FileNotFoundError(f"{args[0]} not on PATH")
+    subprocess.run([exe] + args[1:], check=True, timeout=FFMPEG_TIMEOUT_S,
                    stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
 
 
@@ -228,6 +241,63 @@ def manifest_row(fixture):
     return {key: fixture[key] for key in keys}
 
 
+def replaceable(out_dir):
+    """True when out_dir is absent, empty, or a real directory holding this generator's manifest."""
+    if not os.path.lexists(out_dir):
+        return True
+    if out_dir.is_symlink() or not out_dir.is_dir():
+        return False
+    if next(out_dir.iterdir(), None) is None:
+        return True
+    manifest = out_dir / "manifest.json"
+    if manifest.is_symlink() or not manifest.is_file():
+        return False
+    try:
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(data, dict) and data.get("policy") == POLICY
+
+
+def write_manifest(staging, fixtures):
+    """Write the manifest last; mode "x" creates a new file and fails on any existing path."""
+    manifest = {"policy": POLICY,
+                "generator_sha256": hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest(),
+                "fixtures": [manifest_row(f) for f in fixtures]}
+    with open(staging / "manifest.json", "x", encoding="utf-8") as handle:
+        handle.write(json.dumps(manifest, indent=2) + "\n")
+
+
+def publish(staging, out_dir):
+    """Swap the finished staging directory in for out_dir, then delete the previous set."""
+    mask = os.umask(0)
+    os.umask(mask)
+    os.chmod(staging, 0o777 & ~mask)  # mkdtemp made it 0700
+    holder = pathlib.Path(tempfile.mkdtemp(prefix=f".{out_dir.name}.old-", dir=out_dir.parent))
+    previous = holder / "previous"
+    try:
+        if os.path.lexists(out_dir):
+            os.rename(out_dir, previous)
+        os.rename(staging, out_dir)
+    except OSError:
+        if os.path.lexists(previous) and not os.path.lexists(out_dir):
+            os.rename(previous, out_dir)
+        raise
+    finally:
+        shutil.rmtree(holder)
+
+
+def generate(staging, fixtures, geometry):
+    """Build every fixture and the manifest inside the staging directory."""
+    work = staging / ".work"
+    work.mkdir()
+    side = side_files(work)
+    for fixture in fixtures:
+        build(fixture, staging, geometry, side)
+    shutil.rmtree(work)
+    write_manifest(staging, fixtures)
+
+
 def main(argv):
     """Entry point; returns the process exit code."""
     if len(argv) not in (2, 3) or (len(argv) == 3 and argv[2] != "--large"):
@@ -236,23 +306,28 @@ def main(argv):
     if shutil.which("ffmpeg") is None:
         print("track_fixtures: ffmpeg not on PATH", file=sys.stderr)
         return 1
-    out_dir = pathlib.Path(argv[1])
-    out_dir.mkdir(parents=True, exist_ok=True)
-    work = out_dir / ".work"
-    work.mkdir(exist_ok=True)
+    out_dir = pathlib.Path(argv[1]).absolute()
+    if not replaceable(out_dir):
+        print(f"track_fixtures: refusing {out_dir}: a symlink, not a directory, or a "
+              "non-empty directory without a manifest of this generator", file=sys.stderr)
+        return 1
     large = len(argv) == 3
-    fixtures = FIXTURES[:1] if large else FIXTURES
+    out_dir.parent.mkdir(parents=True, exist_ok=True)
+    staging = pathlib.Path(tempfile.mkdtemp(prefix=f".{out_dir.name}.tmp-", dir=out_dir.parent))
     try:
-        side = side_files(work)
-        for fixture in fixtures:
-            build(fixture, out_dir, LARGE if large else SMALL, side)
+        generate(staging, FIXTURES[:1] if large else FIXTURES, LARGE if large else SMALL)
+        publish(staging, out_dir)
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
         detail = getattr(exc, "stderr", b"") or b""
-        print(f"track_fixtures: ffmpeg failed: {exc}: {detail.decode(errors='replace')[:2000]}", file=sys.stderr)
+        print(f"track_fixtures: ffmpeg failed: {exc}: {detail.decode(errors='replace')[:2000]}",
+              file=sys.stderr)
         return 1
-    manifest = {"policy": "praetor-decided-media-track-policy",
-                "fixtures": [manifest_row(f) for f in fixtures]}
-    (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    except OSError as exc:
+        print(f"track_fixtures: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        if os.path.lexists(staging):
+            shutil.rmtree(staging)
     return 0
 
 

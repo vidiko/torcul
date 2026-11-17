@@ -1,8 +1,9 @@
 # ADR-0002 evidence: backend measurements
 
-Raw results: [`0002-backends.json`](0002-backends.json). Bench script:
-[`tools/bench/backends.py`](../../../tools/bench/backends.py). Fixture
-generator: [`tools/fixtures/track_fixtures.py`](../../../tools/fixtures/track_fixtures.py).
+Raw results: [`0002-backends.json`](0002-backends.json) (all cases) and
+[`0002-backends-probe.json`](0002-backends-probe.json) (second probe run).
+Bench script: [`tools/bench/backends.py`](../../../tools/bench/backends.py).
+Fixture generator: [`tools/fixtures/track_fixtures.py`](../../../tools/fixtures/track_fixtures.py).
 
 ## How the numbers were taken
 
@@ -21,6 +22,12 @@ generator: [`tools/fixtures/track_fixtures.py`](../../../tools/fixtures/track_fi
   ```
 
 - Each row is the median of 3 runs (5 for the probe rows).
+- After review, the bench gained a work-directory lock, process-group kill
+  on timeout, absolute tool paths, manifest-driven fixture lists, a
+  four-field `ffprobe` row and `--cases probe`. The measurement itself
+  (`taskset`, `wait4` rusage, medians) did not change. The second probe run
+  used that version, 2026-11-17 17:44 to 17:45 CET, load average 40 at the
+  start and 35 at the end, with `--cases probe` added to the command above.
 - Tool versions: FFmpeg n9.0.2, SVT-AV1 v4.2.0, x265 4.3, dav1d 1.5.4,
   GStreamer 1.28.9, mkvmerge v103.0. In-process cases use the Rust crates
   `ffmpeg-next` 9.1.0 and `ffmpeg-sys-next` 9.1.1 against the system FFmpeg.
@@ -57,8 +64,23 @@ generator: [`tools/fixtures/track_fixtures.py`](../../../tools/fixtures/track_fi
 | M3 AV1 decode, dav1d CLI, 8 threads | 0.427 | 0.902 | 68.8 |
 | M3 AV1 decode, ffmpeg libdav1d, 8 threads | 0.509 | 0.994 | 119.8 |
 
+Second probe run, the same 11 files:
+
+| Case | Wall (s) | CPU (s) | Peak RSS (MiB) |
+| :--- | ---: | ---: | ---: |
+| M1 ffprobe `-show_streams -of json`, one process per file | 0.572 | 0.515 | 53.4 |
+| M1 ffprobe four fields (`-show_entries stream=index,codec_type,codec_name:stream_tags=language`), one process per file | 0.523 | 0.470 | 52.6 |
+| M1 gst-discoverer, one process per file | 4.373 | 4.098 | 269.4 |
+| M1 libavformat in process | 0.061 | 0.058 | 52.1 |
+
+The four-field row prints the fields `fnprobe` prints. `fnprobe` and
+`ffprobe` both open each file with `avformat_open_input` and
+`avformat_find_stream_info` (`ffmpeg-next` 9.1.0, `src/format/mod.rs`), so
+the 0.41 s gap between those two rows is process start and FFmpeg load,
+about 0.04 s per file. The full JSON output adds 0.045 s over 11 files.
+
 Output sizes (bytes): SVT-AV1 CLI 6,246,344; ffmpeg libsvtav1 6,246,344
-(the same size, so the same encode); GStreamer svtav1enc 6,245,741 (Matroska
+(the same size); GStreamer svtav1enc 6,245,741 (Matroska
 instead of IVF); x265 CLI 5,682,920; ffmpeg libx265 5,682,950; GStreamer
 x265enc 5,621,523 (Matroska, element defaults differ slightly).
 
@@ -97,14 +119,48 @@ Two findings follow:
 ## In-process probe and remux used
 
 The two binaries are throwaway code built only for this measurement, outside
-the repository (Cargo package `fnprobe`, edition 2024, dependency
-`ffmpeg-next = "9.1.0"`, release profile). Source hashes (sha256, first 12
-hex): `src/main.rs` c78b7f2dd774, `src/bin/fnremux.rs` 0b381926c0e3.
+the repository, with `cargo build --release` and the default release
+profile. Input hashes (sha256, first 12 hex): `src/main.rs` c78b7f2dd774,
+`src/bin/fnremux.rs` 0b381926c0e3, `Cargo.toml` c25cee26e99b, `Cargo.lock`
+fdc345706189. The lock file resolves `ffmpeg-next` 9.1.0 and
+`ffmpeg-sys-next` 9.1.1.
 
-`fnprobe` opens every path given to it through `ffmpeg_next::format::input`
-in one process and prints index, medium, codec id and language per stream.
+`Cargo.toml`:
 
-`fnremux <in> <out> <indices>`:
+```toml
+[package]
+name = "fnprobe"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+ffmpeg-next = "9.1.0"
+```
+
+`fnprobe <file>...` (`src/main.rs`) opens every path in one process and
+prints one line per stream:
+
+```rust
+// In-process probe for the ADR-0002 bench: open every path through libavformat
+// in one process and print one line per stream.
+fn main() {
+    ffmpeg_next::init().expect("init");
+    for path in std::env::args().skip(1) {
+        let ictx = ffmpeg_next::format::input(&path).expect("open");
+        for s in ictx.streams() {
+            let p = s.parameters();
+            println!("{} {} {:?} {:?} lang={:?}", path, s.index(), p.medium(), p.id(), s.metadata().get("language"));
+        }
+    }
+}
+```
+
+`fnremux <in> <out> <indices>` (`src/bin/fnremux.rs`). The listing below
+adds two things after the measurement: the `// SAFETY:` proof that HISS-09
+asks for and a null check on `av_mallocz`. The hash above is of the measured
+source, which had neither; every measured run exited 0, so the allocation
+did not fail there.
 
 ```rust
 use ffmpeg_next as ffmpeg;
@@ -128,6 +184,14 @@ fn main() {
         ost.set_parameters(ist.parameters());
         ost.set_metadata(ist.metadata().to_owned());
         ost.set_time_base(ist.time_base());
+        // SAFETY: `par`, `ist` and `ost` point at live stream structs owned by
+        // `octx` and `ictx`, which outlive this block, and nothing else holds a
+        // reference to them here. For an `attached_pic` stream libavformat
+        // fills `attached_pic` with `size` readable bytes at `data`. The copy
+        // goes into a fresh, zeroed buffer of `size` plus the padding libavcodec
+        // requires; the buffer is checked for null before the copy, and it
+        // becomes owned by the codec parameters, freed with them by
+        // `avcodec_parameters_free` (libavcodec/codec_par.h).
         unsafe {
             let par = ost.parameters().as_mut_ptr();
             (*par).codec_tag = 0;
@@ -137,6 +201,7 @@ fn main() {
                 let size = src.size as usize;
                 let pad = ffmpeg::ffi::AV_INPUT_BUFFER_PADDING_SIZE as usize;
                 let buf = ffmpeg::ffi::av_mallocz(size + pad) as *mut u8;
+                assert!(!buf.is_null(), "av_mallocz");
                 std::ptr::copy_nonoverlapping(src.data, buf, size);
                 (*par).codec_type = ffmpeg::ffi::AVMediaType::AVMEDIA_TYPE_ATTACHMENT;
                 (*par).extradata = buf;
