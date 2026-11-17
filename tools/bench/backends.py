@@ -124,6 +124,9 @@ def lock_work(work):
     except BlockingIOError:
         os.close(fd)
         raise RuntimeError(f"another run holds {path}") from None
+    except BaseException:
+        os.close(fd)
+        raise
     return fd
 
 
@@ -189,10 +192,10 @@ def raw_input(work):
                   "testsrc2=size=1920x1080:rate=24", "-frames:v", str(RAW_FRAMES),
                   "-pix_fmt", "yuv420p", "-f", "yuv4mpegpipe", str(partial)],
                  check=True, timeout=CASE_TIMEOUT_S)
-    except (subprocess.SubprocessError, OSError):
+        os.replace(partial, raw)
+    except BaseException:
         partial.unlink(missing_ok=True)
         raise
-    os.replace(partial, raw)
     return raw
 
 

@@ -302,7 +302,7 @@ def publish(staging, out_dir):
         if os.path.lexists(out_dir):
             os.rename(out_dir, previous)
         os.rename(staging, out_dir)
-    except OSError as exc:
+    except BaseException as exc:
         restore(previous, out_dir, holder, exc)
         raise
     shutil.rmtree(holder)
