@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lusoris <lusoris@pm.me>
 # SPDX-License-Identifier: EUPL-1.2
-"""
-Measure pipeline backend options for ADR-0002 on this host.
+"""Measure pipeline backend options for ADR-0002 on this host.
 
 Compares, for the same input and settings, the direct codec command-line
 tools (SvtAv1EncApp, x265, dav1d), FFmpeg's libav* wrappers (ffmpeg,
@@ -35,7 +34,8 @@ import platform
 import shutil
 import signal
 import statistics
-import subprocess
+# subprocess runs argument lists only, never a shell (run_tool, measure).
+import subprocess  # nosec B404  # nosemgrep
 import sys
 import tempfile
 import time
@@ -59,6 +59,13 @@ def tool(args):
     return [exe] + list(args[1:])
 
 
+def run_tool(args, **kwargs):
+    """Run one argument list through tool(); every caller passes a timeout (HISS-02)."""
+    # The list comes from constants of this file and its own paths; tool() resolves the program by name and
+    # no shell runs, so the bandit and semgrep subprocess audit rules do not apply on this line.
+    return subprocess.run(tool(args), **kwargs)  # nosec B603  # nosemgrep
+
+
 def stop_group(child):
     """Kill the timed-out child's whole process group, then reap the child."""
     pgid = os.getpgid(child.pid)
@@ -68,8 +75,7 @@ def stop_group(child):
 
 
 def measure(args, stdout_path=None):
-    """
-    Run one command pinned to CPUS; return wall, cpu seconds and peak RSS in MiB.
+    """Run one command pinned to CPUS; return wall, cpu seconds and peak RSS in MiB.
 
     The command runs in its own session, so a timeout kills every process it
     started. stderr goes to an anonymous file, so a chatty command never
@@ -80,7 +86,8 @@ def measure(args, stdout_path=None):
         err_file = stack.enter_context(tempfile.TemporaryFile())
         argv = tool(["taskset", "-c", CPUS] + tool(args))
         start = time.monotonic()
-        child = subprocess.Popen(argv, stdout=sink, stderr=err_file, start_new_session=True)
+        # argv is a case list from this file, resolved by tool(); no shell (see run_tool).
+        child = subprocess.Popen(argv, stdout=sink, stderr=err_file, start_new_session=True)  # nosec B603  # nosemgrep
         for _ in range(MAX_POLLS):
             pid, status, usage = os.wait4(child.pid, os.WNOHANG)
             if pid:
@@ -149,8 +156,7 @@ def fixture_names(out_dir):
 
 
 def complete_y4m(path):
-    """
-    Whether path is a whole cached raw input: one 1080p 4:2:0 header, RAW_FRAMES frames, nothing more.
+    """Whether path is a whole cached raw input: one 1080p 4:2:0 header, RAW_FRAMES frames, nothing more.
 
     The size must equal the header plus RAW_FRAMES full frames exactly, and every frame must start with
     its FRAME marker, so a file cut anywhere (header, marker or payload) is regenerated, never reused.
@@ -182,10 +188,10 @@ def raw_input(work):
         return raw
     partial = work / (raw.name + ".partial")
     try:
-        subprocess.run(tool(["ffmpeg", "-nostdin", "-y", "-loglevel", "error", "-f", "lavfi", "-i",
-                             "testsrc2=size=1920x1080:rate=24", "-frames:v", str(RAW_FRAMES),
-                             "-pix_fmt", "yuv420p", "-f", "yuv4mpegpipe", str(partial)]),
-                       check=True, timeout=CASE_TIMEOUT_S)
+        run_tool(["ffmpeg", "-nostdin", "-y", "-loglevel", "error", "-f", "lavfi", "-i",
+                  "testsrc2=size=1920x1080:rate=24", "-frames:v", str(RAW_FRAMES),
+                  "-pix_fmt", "yuv420p", "-f", "yuv4mpegpipe", str(partial)],
+                 check=True, timeout=CASE_TIMEOUT_S)
     except (subprocess.SubprocessError, OSError):
         partial.unlink(missing_ok=True)
         raise
@@ -196,14 +202,12 @@ def raw_input(work):
 def fixture_set(out_dir, extra):
     """Regenerate out_dir unless it holds a set from the current generator."""
     if fixture_names(out_dir) is None:
-        subprocess.run(tool([sys.executable, "-I", str(FIXTURES), str(out_dir)] + extra),
-                       check=True, timeout=CASE_TIMEOUT_S)
+        run_tool([sys.executable, "-I", str(FIXTURES), str(out_dir)] + extra, check=True, timeout=CASE_TIMEOUT_S)
     return out_dir
 
 
 def probe_cases(small, inproc):
-    """
-    M1: per-file probe cost, process per file versus one in-process probe of all files.
+    """M1: per-file probe cost, process per file versus one in-process probe of all files.
 
     The in-process probe prints index, medium, codec id and language per
     stream; the second ffprobe row prints the same four fields, so it does the
@@ -295,7 +299,7 @@ def sizes(work):
 def host_facts():
     """Host and tool versions the numbers depend on."""
     def first_line(args):
-        result = subprocess.run(tool(args), capture_output=True, timeout=60, check=False)
+        result = run_tool(args, capture_output=True, timeout=60, check=False)
         text = (result.stdout or result.stderr).decode(errors="replace").strip()
         return text.splitlines()[0] if text else ""
     return {"cpu_set": CPUS, "nproc": os.cpu_count(), "kernel": platform.release(),

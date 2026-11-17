@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Lusoris <lusoris@pm.me>
 # SPDX-License-Identifier: EUPL-1.2
-"""
-Generate the synthetic track-policy fixture set and its expected plans.
+"""Generate the synthetic track-policy fixture set and its expected plans.
 
 Every fixture is generated from FFmpeg's lavfi test sources, so the set has no
 third-party media and no licence of its own. The manifest written beside the
@@ -15,7 +14,7 @@ Usage:
     python3 -I tools/fixtures/track_fixtures.py <out-dir> [--large]
 
 --large writes the bench variant (1920x1080, 120 s) of the first fixture only.
-The set is built in a private staging directory beside <out-dir> and swapped
+The set is built in a new staging directory beside <out-dir> and swapped
 in only when every file and the manifest are written, so a failed or
 interrupted run leaves the previous set as it was. If the swap fails and the
 previous set cannot be moved back, it stays in the `.<name>.old-*` directory
@@ -30,8 +29,10 @@ import hashlib
 import json
 import os
 import pathlib
+import secrets
 import shutil
-import subprocess
+# subprocess runs argument lists only, never a shell (run).
+import subprocess  # nosec B404  # nosemgrep
 import sys
 import tempfile
 
@@ -150,8 +151,11 @@ def run(args):
     exe = shutil.which(args[0])
     if exe is None:
         raise FileNotFoundError(f"{args[0]} not on PATH")
-    subprocess.run([exe] + args[1:], check=True, timeout=FFMPEG_TIMEOUT_S,
-                   stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    # args are FIXTURES constants of this file; the program is resolved by name and no shell runs, so the
+    # bandit and semgrep subprocess audit rules do not apply on this line.
+    argv = [exe] + args[1:]
+    subprocess.run(argv, check=True, timeout=FFMPEG_TIMEOUT_S, stdout=subprocess.DEVNULL,  # nosec B603  # nosemgrep
+                   stderr=subprocess.PIPE)
 
 
 def side_files(work):
@@ -271,8 +275,7 @@ def write_manifest(staging, fixtures):
 
 
 def restore(previous, out_dir, holder, cause):
-    """
-    Put the previous set back after a failed swap, then drop the holder only if it is empty.
+    """Put the previous set back after a failed swap, then drop the holder only if it is empty.
 
     When the set cannot be moved back, or the holder still holds anything, the holder stays on disk and
     the error names it, so a failed publish never deletes the previous set.
@@ -285,11 +288,15 @@ def restore(previous, out_dir, holder, cause):
         raise OSError(f"publish failed and the previous set stays under {holder}: {err}") from cause
 
 
+def make_staging(out_dir):
+    """Create a new staging directory beside out_dir; os.mkdir applies the umask like any user mkdir."""
+    staging = out_dir.parent / f".{out_dir.name}.tmp-{os.getpid()}-{secrets.token_hex(8)}"
+    os.mkdir(staging)  # raises FileExistsError on a name clash: never reuses a directory
+    return staging
+
+
 def publish(staging, out_dir):
     """Swap the finished staging directory in for out_dir, then delete the previous set."""
-    mask = os.umask(0)
-    os.umask(mask)
-    os.chmod(staging, 0o777 & ~mask)  # mkdtemp made it 0700
     holder = pathlib.Path(tempfile.mkdtemp(prefix=f".{out_dir.name}.old-", dir=out_dir.parent))
     previous = holder / "previous"
     try:
@@ -328,7 +335,7 @@ def main(argv):
         return 1
     large = len(argv) == 3
     out_dir.parent.mkdir(parents=True, exist_ok=True)
-    staging = pathlib.Path(tempfile.mkdtemp(prefix=f".{out_dir.name}.tmp-", dir=out_dir.parent))
+    staging = make_staging(out_dir)
     try:
         generate(staging, FIXTURES[:1] if large else FIXTURES, LARGE if large else SMALL)
         publish(staging, out_dir)
