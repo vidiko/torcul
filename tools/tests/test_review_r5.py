@@ -7,14 +7,19 @@ import io
 import json
 import os
 import signal
-import subprocess
 import tempfile
 import time
+import types
 import unittest
 from pathlib import Path
 from unittest import mock
 
 from test_interrupt_cleanup import BACKENDS, FIXTURES
+
+
+def version_result():
+    """Stand in for a finished version query with successful output."""
+    return types.SimpleNamespace(args=[], returncode=0, stdout=b"version\n", stderr=b"")
 
 
 class DisplacedFixturesTests(unittest.TestCase):
@@ -100,7 +105,7 @@ class MeasurementCleanupTests(unittest.TestCase):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.child = None
-        self.popen = subprocess.Popen
+        self.popen = BACKENDS.subprocess.Popen
         self.sleep = time.sleep
         self.interrupted = False
 
@@ -245,7 +250,7 @@ class SelectedVersionsTests(unittest.TestCase):
                     mock.patch.object(BACKENDS.shutil, "which", side_effect=lambda name:
                                       f"/fixture/{name}" if name in allowed else None),
                     mock.patch.object(BACKENDS.subprocess, "run", return_value=
-                                      subprocess.CompletedProcess([], 0, b"version\n", b"")) as run,
+                                      version_result()) as run,
                     mock.patch.object(BACKENDS, "fixture_set", return_value=root / "small"),
                     mock.patch.object(BACKENDS, "probe_cases", return_value=[]),
                     contextlib.redirect_stderr(error),
@@ -274,7 +279,7 @@ class SelectedVersionsTests(unittest.TestCase):
             tempfile.TemporaryDirectory(),
             mock.patch.object(BACKENDS.shutil, "which", side_effect=lambda name: f"/fixture/{name}"),
             mock.patch.object(BACKENDS.subprocess, "run", return_value=
-                              subprocess.CompletedProcess([], 0, b"version\n", b"")) as run,
+                              version_result()) as run,
         ):
             facts = BACKENDS.host_facts()
         versions = {"ffmpeg", "svt", "x265", "dav1d", "gstreamer", "mkvmerge",
