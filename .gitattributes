@@ -1,3 +1,6 @@
+# Tests load Python tools by path; keep LF checkout bytes on every platform (HISS-21).
+*.py text eol=lf
+
 # BEGIN praetor managed attributes (praetorctl adopt)
 # praetorctl audit hashes these files; keep their checkout bytes the same on every platform.
 .devcontainer/Dockerfile.praetor text eol=lf

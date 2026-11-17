@@ -1,0 +1,59 @@
+{
+  "host": {
+    "cpu_set": "0-7",
+    "nproc": 32,
+    "kernel": "7.3.4-1-cachyos",
+    "loadavg_start": [
+      40.396484375,
+      43.064453125,
+      43.330078125
+    ],
+    "ffmpeg": "ffmpeg version n9.0.2 Copyright (c) 2000-2026 the FFmpeg developers",
+    "svt": "SVT-AV1 v4.2.0 (release)",
+    "x265": "x265 [info]: HEVC encoder version 4.3",
+    "dav1d": "1.5.4",
+    "gstreamer": "gst-launch-1.0 version 1.28.9",
+    "mkvmerge": "mkvmerge v103.0 ('The Darkness') 64-bit",
+    "loadavg_end": [
+      35.203125,
+      41.5068359375,
+      42.80029296875
+    ]
+  },
+  "cases": "probe",
+  "rows": [
+    {
+      "wall_s": 0.572,
+      "cpu_s": 0.515,
+      "max_rss_mib": 53.41,
+      "case": "M1 ffprobe, one process per file",
+      "runs": 5,
+      "files": 11
+    },
+    {
+      "wall_s": 0.523,
+      "cpu_s": 0.47,
+      "max_rss_mib": 52.609,
+      "case": "M1 ffprobe four fields, one process per file",
+      "runs": 5,
+      "files": 11
+    },
+    {
+      "wall_s": 4.373,
+      "cpu_s": 4.098,
+      "max_rss_mib": 269.375,
+      "case": "M1 gst-discoverer, one process per file",
+      "runs": 5,
+      "files": 11
+    },
+    {
+      "wall_s": 0.061,
+      "cpu_s": 0.058,
+      "max_rss_mib": 52.113,
+      "case": "M1 libavformat in process (ffmpeg-next)",
+      "runs": 5,
+      "files": 11
+    }
+  ],
+  "sizes_bytes": {}
+}
