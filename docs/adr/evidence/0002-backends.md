@@ -66,7 +66,8 @@ An earlier run the same afternoon (120 frames, and a remux input cut to 1.5 s
 by a generator bug fixed before this run) gave the same picture: SVT-AV1
 through ffmpeg +6.6 % CPU, x265 through ffmpeg +5.0 %, dav1d through ffmpeg
 +29 % on a 0.3 s decode. The x265 difference changed sign between the runs,
-so differences of this size are within the noise of this host.
+so it is within the noise of this host; the SVT-AV1 and dav1d differences
+kept their sign in both runs.
 
 ## Remux fidelity
 

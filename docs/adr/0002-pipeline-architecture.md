@@ -1,4 +1,4 @@
-# ADR-0002: torcul runs its media pipeline in process through libav* from Rust
+# ADR-0002: torcul runs its media pipeline in process from Rust, through libav* and direct SVT-AV1
 
 - **Status**: Accepted; supersedes the "FFmpeg argument builder" part of
   [ADR-0001](0001-vmafx-integration.md) decision 4
@@ -69,14 +69,19 @@ figure compared; the host was under load from other builds.
 | Probe 11 files | in process 0.073 s CPU; `ffprobe` per file 0.520 s (7x); `gst-discoverer-1.0` per file 4.073 s (56x) |
 | Remux 120 s 1080p (95 MB), keep 9 of 13 streams | in process 0.139 s; `mkvmerge` 0.156 s; `ffmpeg -c copy` 0.187 s; all limited by I/O |
 | Remux fidelity | in process and `mkvmerge` keep the cover attachment and the source default flags; `ffmpeg` turns the cover into a video track and adds default flags; the GStreamer pipeline keeps only the tracks it links and flags every track default |
-| AV1 encode, 240 frames 1080p, SVT-AV1 preset 8 | CLI 10.75 s CPU; through libavcodec 11.43 s (+6 %), same output bytes; GStreamer 11.00 s |
-| HEVC encode, same input, x265 preset fast | CLI 19.09 s; through libavcodec 18.02 s (-6 %); GStreamer 17.83 s |
+| AV1 encode, 240 frames 1080p, SVT-AV1 preset 8 | CLI 10.75 s CPU, 2.78 s wall; through libavcodec 11.43 s CPU (+6 %), 3.36 s wall (+21 %), same output size; GStreamer 11.00 s CPU |
+| HEVC encode, same input, x265 preset fast | CLI 19.09 s CPU, 6.09 s wall; through libavcodec 18.02 s CPU (-6 %), 4.62 s wall; GStreamer 17.83 s CPU |
 | AV1 decode, dav1d, 8 threads | CLI 0.90 s; through libavcodec 0.99 s (+10 %) |
 
-The encode differences change sign between runs (the evidence file lists an
-earlier run), so the wrapper costs nothing measurable next to the encoder
-itself. What differs is the cost of starting processes, and whether the tool
-keeps the file as it was.
+The evidence file lists an earlier run of the same cases. Between the two
+runs the x265 difference changed sign (+5.0 % through libavcodec there, -6 %
+here), so for x265 the wrapper costs nothing this host can measure. The
+SVT-AV1 difference kept its sign (+6.6 % there, +6 % here), and so did dav1d
+(+29 % there, +10 % here). Starting a process costs about 0.05 s CPU (0.520 s
+for 11 `ffprobe` runs), which explains part of the dav1d difference on a
+decode under one second but little of the 0.67 s SVT-AV1 difference. For
+probe and remux, what differs is the cost of starting processes and whether
+the tool keeps the file as it was.
 
 Not measured: hardware encode and decode on the Arc cards. The workstation
 has an NVIDIA card; the Arc cards are only in the cluster. The FFmpeg build
@@ -94,16 +99,36 @@ binding. Among the direct libraries only dav1d has a binding past 0.1
 
 ## Decision
 
-1. **One media backend: libav\* in process, from Rust.** torcul calls
-   libavformat, libavcodec, libavfilter and libavutil through the
-   `ffmpeg-next` crate, and through `ffmpeg-sys-next` only for fields the safe
-   API lacks; each `unsafe` block carries a `// SAFETY:` proof (HISS-09).
-   This one backend covers probe, demux, mux, decode, filter and encode, in
-   software (libdav1d, libsvtav1, libx265, and librav1e for issue #4) and in
-   hardware (`*_qsv`, `*_vaapi`, `*_vulkan`), so the hardware choice stays a
-   codec name, not a second framework. The "FFmpeg argument builder" crate
-   of ADR-0001 decision 4 becomes an encoder settings crate that produces
-   libavcodec options (an options dictionary per encoder), not command lines.
+1. **libav\* in process from Rust, with SVT-AV1 called directly for AV1
+   encode.**
+   - torcul calls libavformat, libavcodec, libavfilter and libavutil through
+     the `ffmpeg-next` crate, and through `ffmpeg-sys-next` only for fields
+     the safe API lacks; each `unsafe` block carries a `// SAFETY:` proof
+     (HISS-09). libav\* covers probe, demux, mux, decode and filter, and
+     every encoder except software AV1: libx265 for HEVC (the x265 tool
+     measured no cheaper), librav1e for issue #4, and the hardware encoders
+     (`*_qsv`, `*_vaapi`, `*_vulkan`), so a hardware choice stays a codec
+     name, not a second framework.
+   - Software AV1 encode calls the SVT-AV1 encoder library (`libSvtAv1Enc`,
+     header `EbSvtAv1Enc.h`) directly, in process. Its own tool cost 6 % less
+     CPU and 17 % less wall time than the same encode through libsvtav1, and
+     the CPU difference kept its sign across both runs. Frames decoded and
+     filtered by libav\* go to SVT-AV1 as picture planes; the AV1 packets it
+     returns are muxed by libavformat like any other encoder's.
+   - The binding is a maintained crate if one tracks the installed SVT-AV1
+     release (the candidate is `shiguredo_svt_av1` 2026.2.0, Apache-2.0,
+     released 2026-08-12), otherwise `bindgen` bindings against
+     `EbSvtAv1Enc.h` in a torcul `-sys` crate. The encode slice records the
+     choice and measures the in-process path against libsvtav1, since the
+     bench measured the SVT-AV1 tool, not torcul's own calls.
+   - **One encode trait.** Both backends implement one `Encoder` trait:
+     decoded frames in, packets and stream parameters out, settings from the
+     encoder settings crate. One shared test suite runs its positive,
+     negative and boundary cases against every backend, and its AV1 cases
+     run the direct SVT-AV1 path.
+   - The "FFmpeg argument builder" crate of ADR-0001 decision 4 becomes this
+     encoder settings crate. It produces settings per backend (a libavcodec
+     options dictionary, or SVT-AV1 configuration fields), not command lines.
 2. **No media command-line tool at run time.** torcul never starts `ffmpeg`,
    `ffprobe`, `gst-launch-1.0` or `mkvmerge`. Two exceptions: tests may use
    the `ffmpeg` tool to generate synthetic fixtures
@@ -128,8 +153,10 @@ binding. Among the direct libraries only dav1d has a binding past 0.1
    filesystem.
 5. **Crates.** `torcul-policy` (pure planning, no FFmpeg), `torcul-media`
    (probe, remux, verify over libav\*) and `torcul-cli` (the `torcul`
-   binary: `plan`, `remux`, `verify`, `apply`) come first. Encode, hardware
-   probe and scoring crates follow with issues #3 to #9. The Go service layer
+   binary: `plan`, `remux`, `verify`, `apply`) come first. An encode crate
+   with the `Encoder` trait, its two backends and their shared tests comes
+   next; hardware probe and scoring crates follow with issues #3 to #9. The
+   Go service layer
    of ADR-0001 waits for its own cgo measurement; nothing in this record needs
    Go.
 6. **Cluster job shape.** Private media never leaves the cluster.
@@ -154,17 +181,21 @@ binding. Among the direct libraries only dav1d has a binding past 0.1
    using the compatibility clause of EUPL-1.2 ([`LICENSE`](../../LICENSE),
    Article 5, and the Appendix that lists GPL v2 and v3). Images ship the
    licence notices of FFmpeg and each codec: `ffmpeg-next` WTFPL (its
-   `Cargo.toml`), dav1d BSD-2-Clause, SVT-AV1 BSD-3-Clause-Clear with the
-   Alliance for Open Media Patent License 1.0, x265 GPL-2.0-or-later
+   `Cargo.toml`), dav1d BSD-2-Clause, SVT-AV1 (linked directly and through
+   FFmpeg) BSD-3-Clause-Clear with the Alliance for Open Media Patent
+   License 1.0, x265 GPL-2.0-or-later
    (workstation package metadata and `/usr/share/licenses/svt-av1/`).
 
 Rejected:
 
-- **Direct codec libraries as the main path.** They measured no faster than
-  libavcodec's wrappers for SVT-AV1 and x265, and only dav1d has a maintained
-  Rust binding; the rest would be FFI torcul writes and maintains by hand,
-  duplicating what libavcodec already maintains. Encoder options libavcodec
-  does not name pass through `svtav1-params` and `x265-params`.
+- **Direct codec libraries for every stage.** Only SVT-AV1 encode showed a
+  gain that is not noise. x265 measured no cheaper than through libavcodec.
+  dav1d's tool was cheaper in both runs, but on decodes under one second,
+  where process start is a large share. libavcodec also picks the decoder
+  for every input codec, which dav1d alone cannot (it decodes AV1 only), and
+  its frames feed libavfilter directly. A direct path per codec would be FFI
+  torcul writes and maintains for each library. Options libavcodec does not
+  name still reach libx265 through `x265-params`.
 - **GStreamer.** Probing cost 56 times the in-process figure; the remux
   pipeline needs a parser element per codec (`h264parse`, `aacparse` in the
   bench), lost the cover and flagged every track default; its encoders
@@ -178,8 +209,10 @@ Rejected:
 
 ## Consequences
 
-- **Positive**: one library for every stage and every codec, software or
-  hardware; no process per file; remux output differs from the source only
+- **Positive**: one library for every stage and every codec except software
+  AV1 encode, which skips the libsvtav1 overhead measured here; one encode
+  trait keeps the two encode backends interchangeable and tested alike; no
+  process per file; remux output differs from the source only
   where the plan says so, and the verify stage proves it per packet; the
   crates fit the own-apps rule and can be reused by Aegis-OS (ADR-0001).
 - **Negative**: torcul links FFmpeg, so a GPL FFmpeg build makes torcul
@@ -188,23 +221,35 @@ Rejected:
   is maintenance-only, so new FFmpeg APIs may reach torcul through
   `ffmpeg-sys-next` and `unsafe` first, or need a pull request upstream. Some
   libav\* behaviour has to be corrected in torcul, such as the cover image
-  conversion in decision 3. Hardware choices stay unmeasured until the
-  cluster measurement below lands.
+  conversion in decision 3. AV1 encode has a second binding to keep current:
+  an SVT-AV1 release that changes its API needs a binding update before
+  torcul can take it. Hardware choices stay unmeasured until the cluster
+  measurement below lands.
 - **Follow-up** (issue #11): measure hardware encode and decode on the
   cluster's Arc B60 and B580 (Quick Sync Video against VA-API against Vulkan Video, AV1 and
   HEVC, speed and vmafx score at equal size, and a decode, scale and encode
   chain that stays on the card); the result feeds codec tiering (issue #4)
   and the hardware probe (issue #5).
-- **Revisit when**: an encoder control is needed that libavcodec cannot pass
-  through; a direct library measures more than 10 % cheaper on cluster
-  workloads; `ffmpeg-next` stops compiling against a current FFmpeg release;
-  or live streaming becomes a goal, which is GStreamer's strength.
+- **Revisit when**:
+  - torcul's in-process SVT-AV1 path measures no cheaper than libsvtav1 on
+    cluster workloads (AV1 encode then moves back into libavcodec);
+  - the SVT-AV1 binding cannot follow an SVT-AV1 release that torcul needs;
+  - another direct library (x265, dav1d) measures more than 10 % cheaper than
+    its libavcodec wrapper on library-length cluster workloads;
+  - an encoder control is needed that neither libavcodec nor the SVT-AV1 API
+    can pass through;
+  - `ffmpeg-next` stops compiling against a current FFmpeg release;
+  - live streaming becomes a goal, which is GStreamer's strength.
 
 ## References
 
 - Order `torcul-kickoff-20261117`, operator direction of 2026-11-17
   (paraphrased): start the encode and decode project now; `ffmpeg`
   tool-based flows cost too much time. Tracking issue #10.
+- Ledger id `torcul-backend-libav-inprocess`, operator answer of 2026-11-17
+  on the media backend (paraphrased): libav\* in process for probe, remux and
+  decode; SVT-AV1 called directly for AV1 encode; HEVC on libx265 through
+  libav\*; the encode path behind one trait so both backends share tests.
 - Ledger id `praetor-decided-media-track-policy`: interim library track
   policy (first feature); missing subtitles are fetched or generated in the
   cluster later. Order `twenty-watts-media-track-checks-20261117`: research
