@@ -1,0 +1,20 @@
+# SPDX-FileCopyrightText: 2026 Lusoris <lusoris@pm.me>
+# SPDX-License-Identifier: EUPL-1.2
+[package]
+name = "torcul-media"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+torcul-policy.workspace = true
+ffmpeg-next = { version = "=9.1.0", default-features = false, features = ["format", "codec"] }
+serde.workspace = true
+thiserror.workspace = true
+sha2.workspace = true
+mp4-atom = "=0.17.1"
+tempfile.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+wait-timeout.workspace = true

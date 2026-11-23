@@ -21,7 +21,7 @@ audit:
 	@$(PRAETORCTL) audit
 
 test: build
-	@printf '%s\n' 'test: not applicable: no build system; verify-all checks agent context, caveman sources and audit.'
+	cargo test --locked
 
 build:
-	@printf '%s\n' 'build: not applicable: no build system; verify-all checks agent context, caveman sources and audit.'
+	cargo build --locked

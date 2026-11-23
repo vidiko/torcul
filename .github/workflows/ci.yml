@@ -93,6 +93,14 @@ jobs:
       # PRAETORCTL names the binary built above. Without it the Makefile
       # asks the hook launcher, which would install the pinned commit a
       # second time through the Go module proxy.
+      - name: Install media development libraries and CLI
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libavformat-dev libavcodec-dev libavutil-dev pkg-config clang ffmpeg python3
+
+      - name: Set up Rust from rust-toolchain.toml
+        run: rustup show active-toolchain
+
       - name: Verification gate
         run: make verify-all PRAETORCTL="$RUNNER_TEMP/bin/praetorctl"
 
