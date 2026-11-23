@@ -1,7 +1,8 @@
 # ADR-0002: torcul runs its media pipeline in process from Rust, through libav* and direct SVT-AV1
 
 - **Status**: Accepted; supersedes the "FFmpeg argument builder" part of
-  [ADR-0001](0001-vmafx-integration.md) decision 4
+  [ADR-0001](0001-vmafx-integration.md) decision 4; extended on 2026-11-23 by
+  decisions 8 to 17 (execution ownership, apply and rollback)
 - **Date**: 2026-11-17
 - **Authors**: Lusoris
 
@@ -295,3 +296,284 @@ Rejected:
   tiering, hardware probe, pools, geometry, HDR, scoring surface).
 - FFmpeg n9.0.2, SVT-AV1 v4.2.0, x265 4.3, dav1d 1.5.4, GStreamer 1.28.9,
   MKVToolNix v103.0, `ffmpeg-next` 9.1.0: the versions measured.
+
+## Extension of 2026-11-23: torcul owns media execution, apply and rollback
+
+This section adds decisions 8 to 17. Decisions 1 to 7 above stand as written;
+where a decision below makes one of them more precise, it names it. The
+interfaces this section relies on are listed, with the commit each was read
+at, in [`evidence/0002-contracts.md`](evidence/0002-contracts.md).
+
+### Context of the extension
+
+Two projects had planned to run the same media changes:
+
+- **SnatchArr** (said SNATCH-ar, /ˈsnætʃ.ɑːr/: English *snatch* plus the
+  `-arr` suffix of the Sonarr and Radarr family of library managers, the
+  "\*arr" tools) searches for missing items and quality upgrades across the
+  \*arr tools at a capped rate. Its ADR-0041 (lusoris/SnatchArr,
+  `docs/adr/0041-rule-driven-library-processing.md` at `1ae38363f955`,
+  accepted 2026-10-26) adds rule-driven library processing in which a
+  SnatchArr worker runs `mkvpropedit`, `mkvmerge` and `ffmpeg`, stages to
+  `<name>.snatcharr-tmp.<ext>` and moves originals to a `.snatcharr-trash/`
+  folder for 7 days.
+- torcul's decisions 1 to 7 cover the same stages in process, with no media
+  tool at run time (decision 2).
+
+The operator settled this on 2026-11-23 (ledger id
+`media-execution-ownership-20261123`, answer c, paraphrased): torcul owns all
+media execution, apply and rollback included; SnatchArr keeps the rules, the
+\*arr integrations, the queue and the user interface, starts torcul jobs and
+shows their state; a SnatchArr record supersedes the execution parts of its
+ADR-0041; VMAFx scores; Pelorus keeps processing and telemetry.
+
+**Pelorus** (said pi-LOR-us, /pɪˈlɔːɹəs/) is the GPU sibling of VMAFx: the
+Vulkan home for pre-encode filters, frame analysis and encoder telemetry
+(VMAFx/pelorus `README.md`). A pelorus is a navigator's sighting instrument,
+a compass card without a magnetic needle that takes bearings relative to the
+ship's heading, named after Pelorus, said to have been Hannibal's pilot.
+
+### Decision 8: ownership
+
+| Owner | Owns |
+| :--- | :--- |
+| torcul | probe; plan from the effective rule; demux, decode, filter, encode, mux; staging; verify; apply, rollback and commit; restart; the job record; every lock on a library file |
+| SnatchArr | rule hierarchy, resolution, schema and dry-run preview; the module switch; queue and schedule windows; the user interface; the calls to \*arr tools and media servers after a change; the planner protection; the rollback window the user sets |
+| VMAFx | full-reference scores and their provenance (ADR-0001) |
+| Pelorus | GPU pre-encode filters reached through libavfilter; frame analysis; the encoder telemetry and quality window formats; the encode record format |
+
+- SnatchArr starts no media process and writes no library file. It writes job
+  requests, reads torcul's job records and calls torcul's commands.
+- There is no in-place header edit (ADR-0041 tier 0). A change to a language,
+  a title or a default flag is a remux like any other: staged, verified and
+  applied by exchange. It costs a full copy of the file. An in-place edit
+  cannot be verified before the library sees it, and a crash during the edit
+  leaves a damaged file with no rollback copy.
+
+### Decision 9: trigger and state boundary
+
+In the first phase (decision 6), SnatchArr writes a job request and starts a
+Kubernetes Job that runs `torcul` on it. The request has the schema
+`torcul/job-request/1`, which torcul owns and versions:
+
+| Field | Meaning |
+| :--- | :--- |
+| `source` | the library file |
+| `mode` | `plan`; `stage` (plan, then remux or encode, then verify); or `apply` (stage, then apply) |
+| `rule` | the effective rule SnatchArr resolved: for the track policy the languages to keep, later the encode target |
+| `title` | the title facts the plan needs: original language and anime flag (`TitleMeta` in `torcul-policy`) |
+| `staging_root` | a directory on the same filesystem as `source` |
+| `rollback_days` | how long the rollback copy is kept; default 7, the ADR-0041 retention |
+
+torcul answers with the job record `job.json`, schema `torcul/job/1`, in the
+job's directory (decision 12). torcul writes it and SnatchArr only reads it.
+It holds the request, the source fingerprint, the plan, the verdict, the
+state, and the time and torcul version of every step. The states:
+
+| State | Meaning |
+| :--- | :--- |
+| `planned` | plan written, nothing staged |
+| `unchanged` | the plan changes nothing; final |
+| `staged` | output complete in staging |
+| `verified` | verdict passed; ready to apply |
+| `rejected` | verdict failed; final, library untouched |
+| `applying` | exchange in progress |
+| `applied` | the library holds the output; the original is the rollback copy |
+| `rolling_back` | reverse exchange in progress |
+| `rolled_back` | the library holds the original again; final |
+| `committed` | rollback copy deleted; final |
+| `failed` | a step failed; the record names the step and the error; final |
+
+- `torcul commit <job>` deletes the rollback copy; after it, the job cannot
+  be rolled back. A scheduled `torcul commit --expired` run in the cluster
+  commits every job whose `rollback_days` have passed since `applied`.
+- `torcul rollback <job> <path>` takes the path the applied file has now,
+  since an \*arr tool may rename a file after the apply. It refuses unless the
+  file at that path matches the applied output's fingerprint (decision 10).
+  If an \*arr tool replaced the file with a new download, the rollback copy is
+  stale and the job can only be committed.
+- Telling the \*arr tools and media servers about an apply or a rollback
+  stays with SnatchArr.
+- The later service phase (decision 6) replaces the request file with an API.
+  That API gets its own record; the states above stay its vocabulary.
+
+### Decision 10: source fingerprint
+
+A fingerprint is the device, the inode, the size, the modification time in
+nanoseconds, and `sha256:` followed by 64 hex digits over the whole file. It
+is valid only when a `stat` taken before the hash read and one taken after it
+agree. The same `sha256:` value is the `input.digest` of a Pelorus encode
+record (evidence file).
+
+- torcul refuses a source with more than one hard link (decision 4) and a
+  `staging_root` on a different device from the source.
+- The fingerprint is taken at plan time and compared after the remux or
+  encode, at verify, under the apply lock before the exchange (`stat` first,
+  then the full hash), and on the swapped-out original after the exchange
+  (decision 4, steps 3 and 5).
+- The applied output gets its own fingerprint after the exchange; rollback
+  compares against it.
+
+### Decision 11: stream plan
+
+The plan is a pure function of the probe facts, the effective rule and the
+title facts (`torcul-policy`, decision 5), and the record stores its version.
+It lists the output streams in order. Each names its source stream index and
+one action:
+
+- `copy`: packets copied unchanged;
+- `encode`: with the encoder settings of decision 1;
+- `drop`: with a reason. A track the track policy drops carries
+  `"lid": "pending"` until the language-check stage exists (ledger id
+  `torcul-decided-mvp-no-apply`).
+
+The plan also fixes each output stream's language, title and dispositions,
+the chapters, the attachments (a Matroska cover is written as an attachment,
+decision 3) and the global metadata. Every later step derives the plan again
+from the stored facts and refuses if the result differs from the stored plan.
+A plan that changes nothing ends the job as `unchanged`.
+
+### Decision 12: staging output
+
+Each job has a directory `<staging_root>/<job id>/`. The job id is the first
+32 hex digits of the SHA-256 of the source's canonical path. Keying by path
+keeps one job per library file: a repeated request finds the running job
+instead of starting a second, and two sources with the same file name no
+longer meet in one staging directory. The directory holds:
+
+- `job.json`, written to a temporary name, synced with `fsync`, renamed over
+  the previous record, followed by an `fsync` of the directory;
+- `lock`, the job lock of decision 15;
+- `output.<ext>.partial` while the mux runs, renamed to `output.<ext>` after
+  an `fsync` once complete; `<ext>` is the source container's extension
+  (decision 3).
+
+After the exchange, `output.<ext>` holds the original: it is the rollback copy
+until commit, which deletes it and keeps `job.json`. A new request for a file
+whose job is `applied` is refused until that job is committed or rolled back.
+A new request for a job in a final state replaces it.
+
+### Decision 13: verification
+
+Decision 4's remux checks stand. The verdict also compares the output's
+stream, chapter and attachment counts with the plan, and names the SHA-256 of
+the staged output and the torcul version that produced it; apply refuses a
+staged file whose hash differs from the verdict's. An encode passes when:
+
+- the encoded video has the same frame count and presentation timestamps as
+  the source;
+- every output frame decodes;
+- the VMAFx score meets the job's target (decision 4);
+- the output is below the size ceiling the rule sets.
+
+These replace the ADR-0041 checks of duration within 1.0 s, a decode probe and
+a perceptual-hash distance. Equal frame counts and timestamps are exact where
+a duration tolerance is not, and a cut or a different picture lowers a
+full-reference score computed frame by frame against the original.
+
+### Decision 14: apply and rollback
+
+- **Apply** is decision 4 inside the job record. Under the job lock and the
+  source lock, torcul records `applying`, runs decision 4 steps 1 to 5, stores
+  the applied output's fingerprint and records `applied`.
+- **Rollback** runs under the same locks. torcul records `rolling_back`,
+  checks the applied file at the given path against the applied fingerprint
+  and the rollback copy against the source fingerprint, and exchanges the two
+  with `renameat2(RENAME_EXCHANGE)`. The exchange moves names only, so the
+  original keeps its inode, owner, mode, ACLs and extended attributes. torcul
+  then records `rolled_back` and deletes its own output, which is now at the
+  staging path. The original takes the path the applied file had; SnatchArr
+  tells the \*arr tool.
+- The source lock is decision 4's lock file beside the file being replaced:
+  beside the source for an apply, beside the given path for a rollback.
+
+### Decision 15: restart and yield
+
+- Every torcul command on a job first takes `<job dir>/lock` with a
+  non-blocking `flock`. If another process holds it, the command exits with
+  "busy" and changes nothing. Apply, rollback and commit then take the source
+  lock, always after the job lock, so two commands never wait on each other.
+- A restarted job continues from its recorded state:
+  - a `.partial` output is deleted and the step that wrote it runs again;
+  - a source whose fingerprint changed before apply discards the staged
+    output, and the job starts again from plan;
+  - in `applying` or `rolling_back`, the inode at the library path tells
+    which file is where: the output's inode means the exchange happened, the
+    original's inode means it did not, and torcul finishes or repeats the
+    step to match. Any other inode fails the job and leaves both files where
+    they are.
+- **Yield.** ADR-0041 paused workers with `SIGSTOP` and `SIGCONT`. A stopped
+  process keeps its job lock, its source lock and its GPU lease (decision 6)
+  while doing nothing. A torcul job yields by ending instead: SnatchArr stops
+  the Job, and the restart rules above resume it from the last completed
+  step. An encode slice may add checkpoints inside its step.
+
+### Decision 16: adapters to VMAFx and Pelorus
+
+No adapter is written in this extension; the evidence file is the baseline
+they are written against.
+
+- Scoring (issue #9) uses the `vmafx` crate: `Context`, `Model`, `Picture`,
+  `Context::read_pictures` and `Context::score_pooled`. Until the safe API
+  imports frames, decoded planes are copied into `Picture`. The job record
+  stores the score with its provenance where the safe API exposes it
+  (`Provenance` is in the crate's generated `api_gen.rs`).
+- Each encode builds a `pelorus/encode-record/1` record with `input.digest`
+  set to the source fingerprint's hash, through libpelorus's C API
+  (`pel_encode_record_build`, `pel_encode_record_hash`) until Pelorus has a
+  Rust binding (Pelorus issue 115), and passes the record's digest to VMAFx
+  (`vmafx_context_set_encode_record`).
+- Encoder telemetry (`PEL_SEC_ENC_TELEMETRY`) and quality windows
+  (`PEL_SEC_QUALITY`) are written by the encode slices that need them
+  (issues #2 to #9).
+
+### Decision 17: first slice
+
+Issue #10 ships plan, stage and verify for the track policy, and no apply:
+ledger id `torcul-decided-mvp-no-apply` keeps every library file unchanged
+until the language-check stage exists. Its fixture is one lossless remux of a
+Matroska file with several audio and subtitle streams, chapters and
+attachments, generated by
+[`tools/fixtures/track_fixtures.py`](../../tools/fixtures/track_fixtures.py),
+which gains chapters for it. The test asserts the output's stream, chapter
+and attachment counts against the plan and runs the decision 4 verify on it.
+
+Apply, rollback and commit (decisions 9 and 14) follow in their own slice,
+which waits for:
+
+- the language-check stage running in the cluster;
+- a `RENAME_EXCHANGE` check on the cluster library storage (Consequences
+  above).
+
+### Consequences of the extension
+
+- **Positive**: one implementation of each media step (HISS-19) instead of a
+  torcul one and a SnatchArr worker; every library change, header changes
+  included, is staged, verified and reversible; a crash at any step leaves a
+  state that restart resolves from the record and the inodes; SnatchArr's
+  image needs no media tools.
+- **Negative**: a header-only change costs a full copy and a full-file hash
+  where an in-place edit rewrites a few bytes; rollback copies hold the size
+  of every applied original on the library filesystem for `rollback_days`;
+  SnatchArr's library processing waits for torcul's apply slice.
+- **Revisit when**:
+  - header-only jobs are most of the queue and their copy time measures as
+    the limit on throughput;
+  - SnatchArr needs a step or a state that the commands and record above do
+    not expose;
+  - the library filesystem lacks `RENAME_EXCHANGE`;
+  - the service API lands (its record takes over decision 9's request file).
+
+### References of the extension
+
+- Order `torcul-media-execution-owner-20261123`; ledger id
+  `media-execution-ownership-20261123`, the operator answer of 2026-11-23
+  paraphrased in the context above. The SnatchArr side is order
+  `snatcharr-media-execution-rescope-20261123`.
+- Ledger id `torcul-decided-mvp-no-apply` (2026-11-17): plan, stage and verify
+  only until the language-check stage exists.
+- [`evidence/0002-contracts.md`](evidence/0002-contracts.md): the `vmafx`
+  crate at VMAFx/vmafx `6da90915748d`, Pelorus at VMAFx/pelorus
+  `46fb087733e3`, SnatchArr ADR-0041 at lusoris/SnatchArr `1ae38363f955`.
+- `man 2 rename` (`RENAME_EXCHANGE`), `man 2 flock`, `man 2 fsync`.
+- Wikipedia, "Pelorus (instrument)"; Wiktionary, "pelorus" (pronunciation).
