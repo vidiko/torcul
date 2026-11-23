@@ -461,12 +461,22 @@ therefore keeps an index of applied outputs. An entry is an empty file
 of the applied output's SHA-256; two jobs whose outputs are identical get two
 entries under one hash:
 
-- apply creates the entry and syncs its directory with `fsync` before it
-  records `applied`; commit and rollback remove it after they record their
-  final state;
-- a request whose source hash (decision 10) has an entry naming a job in
-  `applied` is refused, naming that job, until the job is committed or
-  rolled back. An entry naming a job in any other state is stale; the request
+- the index has its own lock, `<staging_root>/applied/lock`, taken with a
+  non-blocking `flock` like the job lock and always after the job lock and
+  the source lock (decision 15). Every read and change of the index below
+  happens while that lock is held;
+- apply records `applying` and creates the entry, syncing its directory with
+  `fsync`, in one hold of the index lock, before decision 4's checks and the
+  exchange. A crash after the exchange therefore always leaves an entry, and
+  restart finishes the job from its record (decision 15);
+- an entry is live while its job is in `applying`, `applied` or
+  `rolling_back` and the verdict's fingerprint of the staged output
+  (decision 13) in that job's record has the entry's hash. A request whose
+  source hash (decision 10) has a live entry is refused, naming that job,
+  until the job is committed or rolled back;
+- commit, rollback and an apply that fails record their final state and
+  remove the entry in one hold of the index lock. An entry that is not live
+  is what a crash between those two steps leaves; the request that finds it
   removes it and goes on;
 - the content hash finds the file after a rename and after a copy to another
   path. A file an \*arr tool rewrote has a new hash, and decision 9 already
@@ -498,9 +508,10 @@ full-reference score computed frame by frame against the original.
 ### Decision 14: apply and rollback
 
 - **Apply** is decision 4 inside the job record. Under the job lock and the
-  source lock, torcul records `applying`, runs decision 4 steps 1 to 5, stores
-  the applied output's fingerprint, writes the applied-index entry
-  (decision 12) and records `applied`.
+  source lock, torcul records `applying` and creates the applied-index entry
+  (decision 12), runs decision 4 steps 1 to 5, stores the applied output's
+  fingerprint and records `applied`. A refusal in those steps, or a swap back
+  at step 5, records `failed` and removes the entry.
 - **Rollback** runs under the same locks, in this order:
   1. torcul checks the applied file at the given path against the applied
      fingerprint and the rollback copy against the source fingerprint, and
@@ -534,7 +545,9 @@ full-reference score computed frame by frame against the original.
 - Every torcul command on a job first takes `<job dir>/lock` with a
   non-blocking `flock`. If another process holds it, the command exits with
   "busy" and changes nothing. Apply, rollback and commit then take the source
-  lock, always after the job lock, so two commands never wait on each other.
+  lock, always after the job lock, and every command that reads or changes
+  the applied index takes its lock last (decision 12). The order is fixed
+  and every lock is non-blocking, so two commands never wait on each other.
 - A restarted job continues from its recorded state:
   - a `.partial` output is deleted and the step that wrote it runs again;
   - a source whose fingerprint changed before apply discards the staged
