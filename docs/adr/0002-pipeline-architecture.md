@@ -465,10 +465,13 @@ entries under one hash:
   non-blocking `flock` like the job lock and always after the job lock and
   the source lock (decision 15). Every read and change of the index below
   happens while that lock is held;
-- apply records `applying` and creates the entry, syncing its directory with
-  `fsync`, in one hold of the index lock, before decision 4's checks and the
-  exchange. A crash after the exchange therefore always leaves an entry, and
-  restart finishes the job from its record (decision 15);
+- apply creates the entry and syncs its directory with `fsync`, then records
+  `applying`, both in one hold of the index lock and before decision 4's
+  checks and the exchange. A crash between the two leaves an entry whose job
+  is not in `applying`: that entry is not live (below), and the library is
+  unchanged. A crash after them leaves both the entry and the record, and
+  restart restores a missing entry before it touches the library
+  (decision 15). The exchange therefore never runs without an entry;
 - an entry is live while its job is in `applying`, `applied` or
   `rolling_back` and the verdict's fingerprint of the staged output
   (decision 13) in that job's record has the entry's hash. A request whose
@@ -476,8 +479,10 @@ entries under one hash:
   until the job is committed or rolled back;
 - commit, rollback and an apply that fails record their final state and
   remove the entry in one hold of the index lock. An entry that is not live
-  is what a crash between those two steps leaves; the request that finds it
-  removes it and goes on;
+  is what a crash between two steps of one hold leaves, here or in apply
+  above; the request that finds it removes it and goes on. Apply makes and
+  records its entry in a single hold, so no request sees an entry that apply
+  is still publishing;
 - the content hash finds the file after a rename and after a copy to another
   path. A file an \*arr tool rewrote has a new hash, and decision 9 already
   leaves that job only commit;
@@ -508,9 +513,9 @@ full-reference score computed frame by frame against the original.
 ### Decision 14: apply and rollback
 
 - **Apply** is decision 4 inside the job record. Under the job lock and the
-  source lock, torcul records `applying` and creates the applied-index entry
-  (decision 12), runs decision 4 steps 1 to 5, stores the applied output's
-  fingerprint and records `applied`. A refusal in those steps, or a swap back
+  source lock, torcul creates the applied-index entry and then records
+  `applying` (decision 12), runs decision 4 steps 1 to 5, stores the applied
+  output's fingerprint and records `applied`. A refusal in those steps, or a swap back
   at step 5, records `failed` and removes the entry.
 - **Rollback** runs under the same locks, in this order:
   1. torcul checks the applied file at the given path against the applied
@@ -552,6 +557,10 @@ full-reference score computed frame by frame against the original.
   - a `.partial` output is deleted and the step that wrote it runs again;
   - a source whose fingerprint changed before apply discards the staged
     output, and the job starts again from plan;
+  - in `applying` or `rolling_back`, torcul first takes the index lock and
+    creates the job's applied-index entry (decision 12) if it is missing,
+    syncing its directory with `fsync`. Only then does it read the library
+    path, so a resumed exchange never runs without an entry;
   - in `applying` or `rolling_back`, the inode at the library path tells
     which file is where. The original's inode is in the source fingerprint;
     the output's inode is in the verdict's fingerprint of the staged output
