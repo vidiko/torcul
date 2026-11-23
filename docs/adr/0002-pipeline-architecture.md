@@ -368,7 +368,8 @@ Kubernetes Job that runs `torcul` on it. The request has the schema
 torcul answers with the job record `job.json`, schema `torcul/job/1`, in the
 job's directory (decision 12). torcul writes it and SnatchArr only reads it.
 It holds the request, the source fingerprint, the plan, the verdict, the
-state, and the time and torcul version of every step. The states:
+applied output's fingerprint, the rollback path (decision 14), the state, and
+the time and torcul version of every step. The states:
 
 | State | Meaning |
 | :--- | :--- |
@@ -449,22 +450,45 @@ longer meet in one staging directory. The directory holds:
   (decision 3).
 
 After the exchange, `output.<ext>` holds the original: it is the rollback copy
-until commit, which deletes it and keeps `job.json`. A new request for a file
-whose job is `applied` is refused until that job is committed or rolled back.
-A new request for a job in a final state replaces it.
+until commit, which deletes it and keeps `job.json`. A new request whose job is
+`applied` is refused until that job is committed or rolled back. A new request
+for a job in a final state replaces it.
+
+The path key alone cannot find an applied job once an \*arr tool renames the
+applied file: a request for the new path gets a new job id. The staging root
+therefore keeps an index of applied outputs. An entry is an empty file
+`<staging_root>/applied/<hash>/<job id>`, where `<hash>` is the 64 hex digits
+of the applied output's SHA-256; two jobs whose outputs are identical get two
+entries under one hash:
+
+- apply creates the entry and syncs its directory with `fsync` before it
+  records `applied`; commit and rollback remove it after they record their
+  final state;
+- a request whose source hash (decision 10) has an entry naming a job in
+  `applied` is refused, naming that job, until the job is committed or
+  rolled back. An entry naming a job in any other state is stale; the request
+  removes it and goes on;
+- the content hash finds the file after a rename and after a copy to another
+  path. A file an \*arr tool rewrote has a new hash, and decision 9 already
+  leaves that job only commit;
+- the index covers one staging root, so SnatchArr passes one `staging_root`
+  per library filesystem.
 
 ### Decision 13: verification
 
 Decision 4's remux checks stand. The verdict also compares the output's
-stream, chapter and attachment counts with the plan, and names the SHA-256 of
-the staged output and the torcul version that produced it; apply refuses a
-staged file whose hash differs from the verdict's. An encode passes when:
+stream, chapter and attachment counts with the plan, and records the staged
+output's fingerprint (decision 10) and the torcul version that produced it;
+apply refuses a staged file whose fingerprint differs from the verdict's. An
+encode passes when:
 
 - the encoded video has the same frame count and presentation timestamps as
   the source;
 - every output frame decodes;
 - the VMAFx score meets the job's target (decision 4);
-- the output is below the size ceiling the rule sets.
+- the output is below the size ceiling the rule sets;
+- every stream the plan marks `copy`, and the chapters, attachments and
+  global metadata, pass decision 4's remux checks, as in a remux.
 
 These replace the ADR-0041 checks of duration within 1.0 s, a decode probe and
 a perceptual-hash distance. Equal frame counts and timestamps are exact where
@@ -475,15 +499,33 @@ full-reference score computed frame by frame against the original.
 
 - **Apply** is decision 4 inside the job record. Under the job lock and the
   source lock, torcul records `applying`, runs decision 4 steps 1 to 5, stores
-  the applied output's fingerprint and records `applied`.
-- **Rollback** runs under the same locks. torcul records `rolling_back`,
-  checks the applied file at the given path against the applied fingerprint
-  and the rollback copy against the source fingerprint, and exchanges the two
-  with `renameat2(RENAME_EXCHANGE)`. The exchange moves names only, so the
-  original keeps its inode, owner, mode, ACLs and extended attributes. torcul
-  then records `rolled_back` and deletes its own output, which is now at the
-  staging path. The original takes the path the applied file had; SnatchArr
-  tells the \*arr tool.
+  the applied output's fingerprint, writes the applied-index entry
+  (decision 12) and records `applied`.
+- **Rollback** runs under the same locks, in this order:
+  1. torcul checks the applied file at the given path against the applied
+     fingerprint and the rollback copy against the source fingerprint, and
+     refuses if either differs;
+  2. it records `rolling_back` and the given path as the rollback path in one
+     record write, so a restart knows which library path to inspect
+     (decision 15);
+  3. it exchanges the two files with `renameat2(RENAME_EXCHANGE)`. The
+     exchange moves names only, so the original keeps its inode, owner, mode,
+     ACLs and extended attributes;
+  4. it checks the file the exchange moved to the staging path against the
+     applied fingerprint again. A writer outside torcul ignores the advisory
+     lock, and this catches a change it made between step 1 and the exchange,
+     as decision 4 step 5 does for apply. On a mismatch torcul exchanges back,
+     records `applied` again with this step and the error in the record, and
+     deletes nothing. The library keeps the changed file and the rollback copy
+     stays in staging. The library file no longer matches the applied
+     fingerprint, so a later rollback refuses at step 1 and the job can only
+     be committed, by hand or by `torcul commit --expired`;
+  5. it records `rolled_back`, removes the job's applied-index entry
+     (decision 12) and deletes its own output, which is now at the staging
+     path.
+
+  The original takes the path the applied file had; SnatchArr tells the \*arr
+  tool.
 - The source lock is decision 4's lock file beside the file being replaced:
   beside the source for an apply, beside the given path for a rollback.
 
@@ -498,10 +540,18 @@ full-reference score computed frame by frame against the original.
   - a source whose fingerprint changed before apply discards the staged
     output, and the job starts again from plan;
   - in `applying` or `rolling_back`, the inode at the library path tells
-    which file is where: the output's inode means the exchange happened, the
-    original's inode means it did not, and torcul finishes or repeats the
-    step to match. Any other inode fails the job and leaves both files where
-    they are.
+    which file is where. The original's inode is in the source fingerprint;
+    the output's inode is in the verdict's fingerprint of the staged output
+    (decision 13), and the exchange keeps both inodes. The two states read it
+    in opposite directions, because rollback runs the exchange in reverse:
+
+    | State | Library path | Output's inode there | Original's inode there |
+    | :--- | :--- | :--- | :--- |
+    | `applying` | the source path | exchange happened: finish from step 5 of decision 4 | exchange not done: repeat from step 3 of decision 4 |
+    | `rolling_back` | the recorded rollback path (decision 14) | exchange not done: record `applied` again; the library is unchanged and the rollback can be requested again | exchange happened: finish from rollback step 4 |
+
+    Any other inode at the library path fails the job and leaves both files
+    where they are.
 - **Yield.** ADR-0041 paused workers with `SIGSTOP` and `SIGCONT`. A stopped
   process keeps its job lock, its source lock and its GPU lease (decision 6)
   while doing nothing. A torcul job yields by ending instead: SnatchArr stops
