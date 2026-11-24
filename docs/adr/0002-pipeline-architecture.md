@@ -465,9 +465,13 @@ entries under one hash:
   non-blocking `flock` like the job lock and always after the job lock and
   the source lock (decision 15). Every read and change of the index below
   happens while that lock is held;
-- apply creates the entry and syncs its directory with `fsync`, then records
-  `applying`, both in one hold of the index lock and before decision 4's
-  checks and the exchange. A crash between the two leaves an entry whose job
+- an entry is created durably: torcul creates every missing directory on the
+  way to it, `<staging_root>/applied` and `<staging_root>/applied/<hash>`,
+  then the entry itself, and after each new directory or file it runs `fsync`
+  on the directory that holds it, up to `<staging_root>`. Once the entry is
+  created, it and every directory on its path survive a crash;
+- apply creates the entry durably, then records `applying`, both in one hold
+  of the index lock and before decision 4's checks and the exchange. A crash between the two leaves an entry whose job
   is not in `applying`: that entry is not live (below), and the library is
   unchanged. A crash after them leaves both the entry and the record, and
   restart restores a missing entry before it touches the library
@@ -558,9 +562,9 @@ full-reference score computed frame by frame against the original.
   - a source whose fingerprint changed before apply discards the staged
     output, and the job starts again from plan;
   - in `applying` or `rolling_back`, torcul first takes the index lock and
-    creates the job's applied-index entry (decision 12) if it is missing,
-    syncing its directory with `fsync`. Only then does it read the library
-    path, so a resumed exchange never runs without an entry;
+    creates the job's applied-index entry durably (decision 12) if the
+    entry or any directory on its path is missing. Only then does it read
+    the library path, so a resumed exchange never runs without an entry;
   - in `applying` or `rolling_back`, the inode at the library path tells
     which file is where. The original's inode is in the source fingerprint;
     the output's inode is in the verdict's fingerprint of the staged output
