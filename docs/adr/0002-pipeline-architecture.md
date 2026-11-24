@@ -527,13 +527,19 @@ full-reference score computed frame by frame against the original.
   more than the disk holds: a crash before the syncs leaves the earlier state
   in the record, and restart reads the files to learn which names survived
   (decision 15). For an exchange, the two directories are the library file's
-  and the job directory.
+  and the job directory. A step that changes a file's owner, group, mode,
+  ACLs or extended attributes runs `fsync` on that file before the next step
+  relies on it; directory syncs do not make inode changes durable.
 - **Apply** is decision 4 inside the job record. Under the job lock and the
   source lock, torcul creates the applied-index entry and then records
-  `applying` (decision 12), runs decision 4 steps 1 to 5, syncs both
-  directories of the exchange, stores the applied output's fingerprint and
-  records `applied`. A refusal in those steps, or a swap back at step 5,
-  records `failed` and removes the entry.
+  `applying` (decision 12), runs decision 4 steps 1 and 2, syncs the staged
+  output with `fsync` so the metadata step 2 copied is on disk before the
+  exchange, runs steps 3 to 5, syncs both directories of the exchange,
+  stores the applied output's fingerprint and records `applied`. A refusal
+  in those steps, or a swap back at step 5, records `failed` and removes the
+  entry. A crash before that file sync leaves the exchange undone, and
+  restart repeats from step 1, which copies the metadata again
+  (decision 15).
 - **Rollback** runs under the same locks, in this order:
   1. torcul checks the applied file at the given path against the applied
      fingerprint and the rollback copy against the source fingerprint, and
