@@ -382,12 +382,16 @@ the time and torcul version of every step. The states:
 | `applied` | the library holds the output; the original is the rollback copy |
 | `rolling_back` | reverse exchange in progress |
 | `rolled_back` | the library holds the original again; final |
+| `held` | a restart found the files in no state it can finish (decision 15); both files, the record and the applied-index entry are kept until an operator commits the job |
 | `committed` | rollback copy deleted; final |
 | `failed` | a step failed; the record names the step and the error; final |
 
 - `torcul commit <job>` deletes the rollback copy; after it, the job cannot
   be rolled back. A scheduled `torcul commit --expired` run in the cluster
-  commits every job whose `rollback_days` have passed since `applied`.
+  commits every job whose `rollback_days` have passed since `applied`; it
+  skips `held` jobs. An operator commits a `held` job by hand after putting
+  its files where they belong: that commit deletes nothing, records
+  `committed` and removes the job's applied-index entry (decision 12).
 - `torcul rollback <job> <path>` takes the path the applied file has now,
   since an \*arr tool may rename a file after the apply. It refuses unless the
   file at that path matches the applied output's fingerprint (decision 10).
@@ -451,8 +455,8 @@ longer meet in one staging directory. The directory holds:
 
 After the exchange, `output.<ext>` holds the original: it is the rollback copy
 until commit, which deletes it and keeps `job.json`. A new request whose job is
-`applied` is refused until that job is committed or rolled back. A new request
-for a job in a final state replaces it.
+`applied` or `held` is refused until that job is committed or rolled back. A
+new request for a job in a final state replaces it.
 
 The path key alone cannot find an applied job once an \*arr tool renames the
 applied file: a request for the new path gets a new job id. The staging root
@@ -471,13 +475,14 @@ entries under one hash:
   on the directory that holds it, up to `<staging_root>`. Once the entry is
   created, it and every directory on its path survive a crash;
 - apply creates the entry durably, then records `applying`, both in one hold
-  of the index lock and before decision 4's checks and the exchange. A crash between the two leaves an entry whose job
-  is not in `applying`: that entry is not live (below), and the library is
-  unchanged. A crash after them leaves both the entry and the record, and
-  restart restores a missing entry before it touches the library
-  (decision 15). The exchange therefore never runs without an entry;
-- an entry is live while its job is in `applying`, `applied` or
-  `rolling_back` and the verdict's fingerprint of the staged output
+  of the index lock and before decision 4's checks and the exchange. A crash
+  between the two leaves an entry whose job is not in `applying`: that entry
+  is not live (below), and the library is unchanged. A crash after them
+  leaves both the entry and the record, and restart restores a missing entry
+  before it touches the library (decision 15). The exchange therefore never
+  runs without an entry;
+- an entry is live while its job is in `applying`, `applied`,
+  `rolling_back` or `held` and the verdict's fingerprint of the staged output
   (decision 13) in that job's record has the entry's hash. A request whose
   source hash (decision 10) has a live entry is refused, naming that job,
   until the job is committed or rolled back;
@@ -516,11 +521,19 @@ full-reference score computed frame by frame against the original.
 
 ### Decision 14: apply and rollback
 
+- **Durability.** A step that renames, exchanges, creates or deletes a name
+  runs `fsync` on every directory whose entries it changed before torcul
+  writes the record that relies on that step. A record therefore never claims
+  more than the disk holds: a crash before the syncs leaves the earlier state
+  in the record, and restart reads the files to learn which names survived
+  (decision 15). For an exchange, the two directories are the library file's
+  and the job directory.
 - **Apply** is decision 4 inside the job record. Under the job lock and the
   source lock, torcul creates the applied-index entry and then records
-  `applying` (decision 12), runs decision 4 steps 1 to 5, stores the applied
-  output's fingerprint and records `applied`. A refusal in those steps, or a swap back
-  at step 5, records `failed` and removes the entry.
+  `applying` (decision 12), runs decision 4 steps 1 to 5, syncs both
+  directories of the exchange, stores the applied output's fingerprint and
+  records `applied`. A refusal in those steps, or a swap back at step 5,
+  records `failed` and removes the entry.
 - **Rollback** runs under the same locks, in this order:
   1. torcul checks the applied file at the given path against the applied
      fingerprint and the rollback copy against the source fingerprint, and
@@ -540,9 +553,9 @@ full-reference score computed frame by frame against the original.
      stays in staging. The library file no longer matches the applied
      fingerprint, so a later rollback refuses at step 1 and the job can only
      be committed, by hand or by `torcul commit --expired`;
-  5. it records `rolled_back`, removes the job's applied-index entry
-     (decision 12) and deletes its own output, which is now at the staging
-     path.
+  5. it syncs both directories of the exchange, records `rolled_back`,
+     removes the job's applied-index entry (decision 12) and deletes its own
+     output, which is now at the staging path.
 
   The original takes the path the applied file had; SnatchArr tells the \*arr
   tool.
@@ -565,19 +578,23 @@ full-reference score computed frame by frame against the original.
     creates the job's applied-index entry durably (decision 12) if the
     entry or any directory on its path is missing. Only then does it read
     the library path, so a resumed exchange never runs without an entry;
-  - in `applying` or `rolling_back`, the inode at the library path tells
-    which file is where. The original's inode is in the source fingerprint;
-    the output's inode is in the verdict's fingerprint of the staged output
-    (decision 13), and the exchange keeps both inodes. The two states read it
-    in opposite directions, because rollback runs the exchange in reverse:
+  - in `applying` or `rolling_back`, the inodes at the library path and at
+    the job's `output.<ext>` tell which file is where. The original's inode
+    is in the source fingerprint; the output's inode is in the verdict's
+    fingerprint of the staged output (decision 13), and the exchange keeps
+    both inodes. The library path is the source path in `applying` and the
+    recorded rollback path (decision 14) in `rolling_back`:
 
-    | State | Library path | Output's inode there | Original's inode there |
-    | :--- | :--- | :--- | :--- |
-    | `applying` | the source path | exchange happened: finish from step 5 of decision 4 | exchange not done: repeat from step 3 of decision 4 |
-    | `rolling_back` | the recorded rollback path (decision 14) | exchange not done: record `applied` again; the library is unchanged and the rollback can be requested again | exchange happened: finish from rollback step 4 |
+    | State | Library: output, staging: original | Library: original, staging: output |
+    | :--- | :--- | :--- |
+    | `applying` | exchange happened: sync both directories, finish from step 5 of decision 4 | exchange not done: repeat from step 1 of decision 4, so the checks and the metadata copy run again |
+    | `rolling_back` | exchange not done: record `applied` again; the library is unchanged and the rollback can be requested again | exchange happened: sync both directories, finish from rollback step 4 |
 
-    Any other inode at the library path fails the job and leaves both files
-    where they are.
+    Any other combination, such as a file an outside tool moved or replaced,
+    records `held` with the inodes found. The job keeps both files where
+    they are, its record and its live applied-index entry, so a request for
+    a moved output is still refused, until an operator commits it
+    (decision 9).
 - **Yield.** ADR-0041 paused workers with `SIGSTOP` and `SIGCONT`. A stopped
   process keeps its job lock, its source lock and its GPU lease (decision 6)
   while doing nothing. A torcul job yields by ending instead: SnatchArr stops
