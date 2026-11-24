@@ -1,5 +1,5 @@
-# Praetor bootstrap v1; selected source digest sha256:525a0609dac2affa8b4579de734a81539257966e3bfb3a39840d8041412425b0
-FROM docker.io/library/golang@sha256:b8c9b82affbbb82a020bbcf998dad2ba9516944ac7e883524642a481a9505e9c AS praetor_build
+# Praetor bootstrap v1; selected source digest sha256:a9b1708df4fc21ef9a13f852db60a3db582610ee4b95e341044d48421139d4f4
+FROM docker.io/library/golang@sha256:eb61c3873c97416fff0116553fff65d67a3549f72e11d9758849a689cdd8b523 AS praetor_build
 WORKDIR /praetor-source
 COPY ["praetor-source.000.b64", "/tmp/praetor-source/000.b64"]
 COPY ["praetor-source.001.b64", "/tmp/praetor-source/001.b64"]
@@ -8,8 +8,9 @@ COPY ["praetor-source.003.b64", "/tmp/praetor-source/003.b64"]
 COPY ["praetor-source.004.b64", "/tmp/praetor-source/004.b64"]
 COPY ["praetor-source.005.b64", "/tmp/praetor-source/005.b64"]
 COPY ["praetor-source.006.b64", "/tmp/praetor-source/006.b64"]
+COPY ["praetor-source.007.b64", "/tmp/praetor-source/007.b64"]
 RUN cat /tmp/praetor-source/*.b64 > /tmp/praetor-source.b64 && base64 -d /tmp/praetor-source.b64 > /tmp/praetor-source.tar.gz
-RUN echo '7919748bc446c5ed5a7b33ad76ba3f12f11917b7c6d41dfcd5faf2f2902cdfd0  /tmp/praetor-source.tar.gz' > /tmp/praetor-source.sha256 && sha256sum -c /tmp/praetor-source.sha256 && tar -xzf /tmp/praetor-source.tar.gz -C /praetor-source
+RUN echo 'b102528d6acb9a9caf47cc5a03f183c8c97a37ce6c1ea8c1bbdd997f5d6e45c8  /tmp/praetor-source.tar.gz' > /tmp/praetor-source.sha256 && sha256sum -c /tmp/praetor-source.sha256 && tar -xzf /tmp/praetor-source.tar.gz -C /praetor-source
 ENV GOTOOLCHAIN=local CGO_ENABLED=0 GOPROXY=https://proxy.golang.org GOSUMDB=sum.golang.org
 RUN sha256sum go.mod go.sum > /tmp/praetor-modules.sha256 && /usr/local/go/bin/go mod download && /usr/local/go/bin/go mod verify && sha256sum -c /tmp/praetor-modules.sha256
 RUN /usr/local/go/bin/go build -mod=readonly -trimpath -buildvcs=false -o /out/praetorctl ./cmd/standardsctl
