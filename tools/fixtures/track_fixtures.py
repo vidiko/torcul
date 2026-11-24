@@ -38,9 +38,11 @@ Requires the ffmpeg binary on PATH. Exit 0 on success, 2 on a usage error,
 """
 
 FFMPEG_TIMEOUT_S = 600  # HISS-02: deadline for one ffmpeg call
+MAX_CHAPTERS = 1000
 SMALL = {"size": "320x180", "seconds": 2}
 LARGE = {"size": "1920x1080", "seconds": 120}
 POLICY = "praetor-decided-media-track-policy"
+KIND_MAP = {"a": "audio", "s": "subtitle", "t": "attachment", "c": "video"}
 
 # One row per track after the video stream: (kind, language, title, dispositions).
 # kind: a = audio, s = subtitle, t = attachment (font), c = cover image attachment.
@@ -60,7 +62,7 @@ FIXTURES = [
         "expect": [0, 1, 2, 5, 6, 7, 8, 9, 12], "warnings": [], "needs_remux": True,
     },
     {
-        "name": "f02_anime_ja.mkv", "original": "ja", "anime": True,
+        "name": "f02_anime_ja.mkv", "original": "ja", "anime": True, "chapters": 3,
         "tracks": [
             ("a", "jpn", "Japanese", "default"), ("a", "eng", "English", ""),
             ("a", "ger", "Deutsch", ""), ("a", "fre", "Francais", ""),
@@ -230,12 +232,55 @@ def codec_args(fixture):
     return args
 
 
+def chapter_metadata(seconds, chapters):
+    """Build an FFMETADATA1 document with `chapters` evenly spaced millisecond ranges."""
+    if chapters < 0 or chapters > MAX_CHAPTERS:
+        raise ValueError(f"chapter count out of bounds: {chapters}")
+    total_ms = int(seconds) * 1000
+    lines = [";FFMETADATA1\n"]
+    for index in range(chapters):
+        start = (index * total_ms) // chapters
+        end = ((index + 1) * total_ms) // chapters
+        lines.append(
+            f"[CHAPTER]\nTIMEBASE=1/1000\nSTART={start}\nEND={end}\ntitle=Chapter {index + 1}\n"
+        )
+    return "".join(lines)
+
+
+def count_streams(kinds):
+    """Count stream kinds in fixed dictionary key order."""
+    counts = {"video": 0, "audio": 0, "subtitle": 0, "attachment": 0}
+    for kind in kinds:
+        counts[kind] += 1
+    return counts
+
+
+def stream_counts(fixture):
+    """Compute source and expected output per-kind stream counts from track definitions."""
+    all_kinds = ["video"] + [KIND_MAP[track[0]] for track in fixture["tracks"]]
+    kept_kinds = [all_kinds[index] for index in fixture["expect"]]
+    return {"source": count_streams(all_kinds), "output": count_streams(kept_kinds)}
+
+
 def build(fixture, out_dir, geometry, side):
     """Generate one fixture file."""
     srt, fonts, cover = side
     args = ["ffmpeg", "-nostdin", "-y", "-loglevel", "error"]
-    args += input_args(fixture, geometry, srt)
+    inputs = input_args(fixture, geometry, srt)
+    chapters = fixture.get("chapters", 0)
+    if chapters > 0:
+        ffmeta = srt.parent / f"{fixture['name']}.ffmeta"
+        ffmeta.write_text(
+            chapter_metadata(geometry["seconds"], chapters), encoding="utf-8"
+        )
+        chapter_input = inputs.count("-i")
+        inputs += ["-f", "ffmetadata", "-i", str(ffmeta)]
+        chapter_args = ["-map_chapters", str(chapter_input)]
+    else:
+        chapter_args = ["-map_chapters", "-1"]
+    args += inputs
     args += stream_args(fixture, fonts, cover)
+    args += chapter_args
     args += codec_args(fixture)
     # -t, not -shortest: the subtitle inputs end at 1.5 s and would cut the file.
     args += ["-t", str(geometry["seconds"]), str(out_dir / fixture["name"])]
@@ -245,7 +290,10 @@ def build(fixture, out_dir, geometry, side):
 def manifest_row(fixture):
     """The oracle row of one fixture, without the generator-only track table."""
     keys = ("name", "original", "anime", "expect", "warnings", "needs_remux")
-    return {key: fixture[key] for key in keys}
+    row = {key: fixture[key] for key in keys}
+    row["chapters"] = fixture.get("chapters", 0)
+    row["counts"] = stream_counts(fixture)
+    return row
 
 
 def replaceable(out_dir):

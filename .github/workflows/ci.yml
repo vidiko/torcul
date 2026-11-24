@@ -93,6 +93,23 @@ jobs:
       # PRAETORCTL names the binary built above. Without it the Makefile
       # asks the hook launcher, which would install the pinned commit a
       # second time through the Go module proxy.
+      - name: Install build prerequisites for pinned FFmpeg and bindgen
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang libx264-dev nasm pkg-config python3 xz-utils zlib1g-dev
+
+      - name: Cache pinned FFmpeg 9.0.2 prefix
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ${{ runner.temp }}/ffmpeg-9.0.2
+          key: ffmpeg-9.0.2-${{ runner.os }}-${{ hashFiles('tools/ci/install_ffmpeg.py') }}
+
+      - name: Install pinned FFmpeg 9.0.2
+        run: python3 -I tools/ci/install_ffmpeg.py "$RUNNER_TEMP/ffmpeg-9.0.2"
+
+      - name: Set up Rust from rust-toolchain.toml
+        run: rustup show active-toolchain
+
       - name: Verification gate
         run: make verify-all PRAETORCTL="$RUNNER_TEMP/bin/praetorctl"
 
