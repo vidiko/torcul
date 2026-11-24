@@ -123,16 +123,19 @@ fn track(stream: ffmpeg::Stream<'_>) -> TrackInfo {
 
 fn dispositions(stream: &ffmpeg::Stream<'_>) -> std::collections::BTreeSet<String> {
     // SAFETY: stream owns a live AVStream; read-only access stays within its borrow.
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage -- FFI read of AVStream.disposition, which ffmpeg-next 9.1.0 truncates to known bits; proof in the SAFETY comment above (HISS-09); category D, expires 2027-03-24, ends when ffmpeg-next exposes every disposition bit
     let bits = unsafe { (*stream.as_ptr()).disposition } as u32;
     (0..32)
         .filter(|bit| bits & (1_u32 << bit) != 0)
         .map(|bit| {
             // SAFETY: FFmpeg returns a static NUL-terminated name or NULL for any bit.
+            // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage -- FFI call to av_disposition_to_string, which has no ffmpeg-next 9.1.0 wrapper; proof in the SAFETY comment above (HISS-09); category D, expires 2027-03-24, ends when ffmpeg-next wraps av_disposition_to_string
             let name = unsafe { ffmpeg::ffi::av_disposition_to_string((1_u32 << bit) as i32) };
             if name.is_null() {
                 return format!("bit-{bit}");
             }
             // SAFETY: non-null name points to a static C string per av_disposition_to_string.
+            // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage -- CStr borrow of static C string from av_disposition_to_string, which has no ffmpeg-next 9.1.0 wrapper; proof in the SAFETY comment above (HISS-09); category D, expires 2027-03-24, ends when ffmpeg-next wraps av_disposition_to_string
             unsafe { std::ffi::CStr::from_ptr(name) }
                 .to_string_lossy()
                 .into_owned()

@@ -7,11 +7,12 @@ import os
 import pathlib
 import re
 import shutil
-import subprocess  # nosec B404  # nosemgrep
+import subprocess  # nosec B404 # invoked with resolved argument vectors and no shell
 import sys
 import tarfile
 import tempfile
 import urllib.error
+import urllib.parse
 import urllib.request
 
 FFMPEG_VERSION = "9.0.2"
@@ -75,7 +76,8 @@ def run_checked(args, *, cwd=None, env=None, timeout=BUILD_TIMEOUT_S):
     if exe is None:
         raise FileNotFoundError(f"required executable not on PATH: {args[0]}")
     argv = [exe, *args[1:]]
-    return subprocess.run(  # nosec B603  # nosemgrep
+    return subprocess.run(  # nosec B603 # argv list with resolved executable and shell=False
+        # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args -- argv list, no shell, argv[0] resolved through shutil.which; only the --prefix path comes from the command line; category D, expires 2027-03-24, ends when the CI runner image ships FFmpeg 9 and this installer goes
         argv,
         cwd=cwd,
         env=env,
@@ -127,12 +129,32 @@ def verify_installed(prefix, expected_sha256):
     return FFMPEG_TAG in first_line
 
 
+def require_release_url(url: str) -> None:
+    """Reject any download URL outside https://ffmpeg.org without credentials or port."""
+    parts = urllib.parse.urlsplit(url)
+    try:
+        port = parts.port
+    except ValueError as exc:
+        raise ValueError(f"disallowed FFmpeg release URL: {url}") from exc
+    if (
+        parts.scheme != "https"
+        or parts.hostname != "ffmpeg.org"
+        or port is not None
+        or parts.username is not None
+        or parts.password is not None
+        or parts.netloc != "ffmpeg.org"
+    ):
+        raise ValueError(f"disallowed FFmpeg release URL: {url}")
+
+
 def download_and_verify(url, archive_path, expected_sha256):
     """Download `url` under a network timeout and verify its SHA-256 digest."""
+    require_release_url(url)
     digest = hashlib.sha256()
     finished = False
     with (
-        urllib.request.urlopen(url, timeout=NETWORK_TIMEOUT_S) as response,  # nosec B310
+        # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected, python_urlopen_rule-urllib-urlopen -- url passed require_release_url (https, host ffmpeg.org only, no port or credentials) and payload SHA-256 is verified before use; category D, expires 2027-03-24, ends when the CI runner image ships FFmpeg 9 and this installer goes
+        urllib.request.urlopen(url, timeout=NETWORK_TIMEOUT_S) as response,  # nosec B310 # url validated by require_release_url to https://ffmpeg.org only
         open(archive_path, "wb") as handle,
     ):
         for _ in range(MAX_CHUNKS):

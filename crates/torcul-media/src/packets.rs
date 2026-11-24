@@ -104,6 +104,7 @@ fn packet_record(packet: &Packet) -> PacketRecord {
     let raw_duration = packet.duration();
     let duration = (raw_duration != ffmpeg::ffi::AV_NOPTS_VALUE).then_some(raw_duration);
     // SAFETY: packet owns a live AVPacket; side_data points to side_data_elems entries when non-null.
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage -- FFI read of AVPacket.side_data, because ffmpeg-next 9.1.0 SideData::data() skips null checks and SideData::kind() can hit unimplemented!(); proof in the SAFETY comment above (HISS-09); category D, expires 2027-03-24, ends when ffmpeg-next soundly wraps packet side data
     let side_data = unsafe {
         let raw = &*packet.as_ptr();
         raw_side_data(raw.side_data, raw.side_data_elems)
@@ -135,6 +136,7 @@ pub(crate) fn codec_params(stream: &ffmpeg::Stream<'_>) -> CodecParams {
     let avg_rate = stream.avg_frame_rate();
     // SAFETY: parameters holds a live AVCodecParameters tied to stream's borrow;
     // extradata, coded_side_data and custom channel maps remain valid for their positive counts.
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage -- FFI read of AVCodecParameters fields, because ffmpeg-next 9.1.0 codec::Parameters exposes only medium, id and bit_rate; proof in the SAFETY comment above (HISS-09); category D, expires 2027-03-24, ends when ffmpeg-next exposes full codec parameters and coded side data
     unsafe {
         let raw = &*parameters.as_ptr();
         let extradata = if raw.extradata.is_null() || raw.extradata_size <= 0 {
@@ -169,16 +171,19 @@ unsafe fn channel_layout(raw: &ffmpeg::ffi::AVChannelLayout) -> ChannelLayout {
     let mask = match raw.order {
         AVChannelOrder::AV_CHANNEL_ORDER_NATIVE | AVChannelOrder::AV_CHANNEL_ORDER_AMBISONIC => {
             // SAFETY: union arm `mask` is active for native and ambisonic channel orders.
+            // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage -- FFI union read of AVChannelLayout.u.mask, which has no ffmpeg-next 9.1.0 wrapper; proof in the SAFETY comment above (HISS-09); category D, expires 2027-03-24, ends when ffmpeg-next wraps AVChannelLayout
             unsafe { raw.u.mask }
         }
         _ => 0,
     };
     let custom_ids = if raw.order == AVChannelOrder::AV_CHANNEL_ORDER_CUSTOM
         // SAFETY: union arm `map` is active for custom channel order; checked for non-null and positive count.
+        // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage -- FFI union pointer check on AVChannelLayout.u.map, which has no ffmpeg-next 9.1.0 wrapper; proof in the SAFETY comment above (HISS-09); category D, expires 2027-03-24, ends when ffmpeg-next wraps AVChannelLayout
         && unsafe { !raw.u.map.is_null() }
         && raw.nb_channels > 0
     {
         // SAFETY: FFmpeg allocates `nb_channels` entries at `u.map` for custom channel layouts.
+        // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage -- FFI slice read of AVChannelLayout.u.map entries, which has no ffmpeg-next 9.1.0 wrapper; proof in the SAFETY comment above (HISS-09); category D, expires 2027-03-24, ends when ffmpeg-next wraps AVChannelLayout
         unsafe { std::slice::from_raw_parts(raw.u.map, raw.nb_channels as usize) }
             .iter()
             .map(|entry| entry.id as i32)
@@ -203,6 +208,7 @@ unsafe fn raw_side_data(
         return Vec::new();
     }
     // SAFETY: non-null `ptr` and positive `count` reference a contiguous FFmpeg side-data array.
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage -- FFI slice read of AVPacketSideData array, because ffmpeg-next 9.1.0 SideData::data() skips null checks and SideData::kind() can hit unimplemented!(); proof in the SAFETY comment above (HISS-09); category D, expires 2027-03-24, ends when ffmpeg-next soundly wraps side-data arrays
     let entries = unsafe { std::slice::from_raw_parts(ptr, count as usize) };
     let mut out = Vec::new();
     for entry in entries {
@@ -213,6 +219,7 @@ unsafe fn raw_side_data(
             Box::default()
         } else {
             // SAFETY: non-null `entry.data` holds `entry.size` initialized bytes owned by FFmpeg.
+            // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage -- FFI slice read of AVPacketSideData payload after null check, because ffmpeg-next 9.1.0 SideData::data() calls from_raw_parts unchecked; proof in the SAFETY comment above (HISS-09); category D, expires 2027-03-24, ends when ffmpeg-next checks null side-data pointers
             unsafe { std::slice::from_raw_parts(entry.data, entry.size) }.into()
         };
         out.push(SideDataRecord { kind, data: bytes });
@@ -243,6 +250,7 @@ pub(crate) fn picture_attachment(
     // SAFETY: both streams live; target exclusively borrowed. New padded buffer
     // allocated with FFmpeg allocator, transferred to target codecpar ownership;
     // old extradata freed with its matching allocator. No pointers escape.
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage -- FFI copy of AVStream.attached_pic into target codecpar extradata, which has no ffmpeg-next 9.1.0 wrapper; proof in the SAFETY comment above (HISS-09); category D, expires 2027-03-24, ends when ffmpeg-next exposes attached_pic and owned extradata assignment
     unsafe {
         let packet = &(*source.as_ptr()).attached_pic;
         if packet.size <= 0 || packet.data.is_null() {

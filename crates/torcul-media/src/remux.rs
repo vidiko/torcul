@@ -29,6 +29,7 @@ struct Output {
 // SAFETY: only installed with a live boxed Deadline owned by Output.
 unsafe extern "C" fn interrupt(opaque: *mut std::ffi::c_void) -> i32 {
     // SAFETY: opaque installed from Box<Deadline>; Output drops context first.
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage -- FFI callback borrow of AVIOInterruptCB opaque pointer, because ffmpeg-next 9.1.0 provides no output interrupt callback wrapper; proof in the SAFETY comment above (HISS-09); category D, expires 2027-03-24, ends when ffmpeg-next wraps output interrupt callbacks
     i32::from(unsafe { &*opaque.cast::<Deadline>() }.expired())
 }
 
@@ -44,6 +45,7 @@ fn output(file: File, container: &str, deadline: Deadline) -> Result<Output> {
     let mut guard = Box::new(deadline);
     // SAFETY: context exclusively owned; stable boxed deadline outlives context;
     // custom IO has its own deadline checks on every write/flush/seek callback.
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage -- FFI assignment of AVFormatContext.interrupt_callback, which has no ffmpeg-next 9.1.0 wrapper on Output; proof in the SAFETY comment above (HISS-09); category D, expires 2027-03-24, ends when ffmpeg-next wraps output interrupt_callback setup
     unsafe {
         (*inner.as_mut_ptr()).interrupt_callback = ffmpeg::ffi::AVIOInterruptCB {
             callback: Some(interrupt),
@@ -141,6 +143,7 @@ fn run(
     av("write output trailer", out.inner.write_trailer())?;
     // SAFETY: live custom-IO output owns non-null pb. Trailer flushed buffer;
     // inspect AVIO's latched write error before destructor can discard it.
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage -- FFI read of AVIOContext.error on custom output I/O, which has no ffmpeg-next 9.1.0 wrapper; proof in the SAFETY comment above (HISS-09); category D, expires 2027-03-24, ends when ffmpeg-next exposes AVIOContext error state
     let code = unsafe { (*(*out.inner.as_ptr()).pb).error };
     if code < 0 {
         return av("flush output", Err(ffmpeg::Error::from(code)));
@@ -194,6 +197,7 @@ fn copy_parameters(
 ) -> Result<()> {
     // SAFETY: source parameters live throughout call; target owns fresh codecpar.
     // Deep copy includes extradata and coded side data; errors checked.
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage -- FFI call to avcodec_parameters_copy and AVStream disposition/codec_tag setup, because ffmpeg-next 9.1.0 discards the copy result code and lacks disposition setters; proof in the SAFETY comment above (HISS-09); category D, expires 2027-03-24, ends when ffmpeg-next checks avcodec_parameters_copy errors and exposes stream disposition setters
     let result = unsafe {
         let dst = target.as_mut_ptr();
         let src = source.as_ptr();
@@ -283,12 +287,14 @@ fn write_header(
     // SAFETY: output exclusively owned, custom AVIO live, no options. Explicit
     // init runs the muxer's metadata rewrite before restoring source tags.
     let result =
+        // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage -- FFI call to avformat_init_output, which has no ffmpeg-next 9.1.0 wrapper; proof in the SAFETY comment above (HISS-09); category D, expires 2027-03-24, ends when ffmpeg-next wraps avformat_init_output
         unsafe { ffmpeg::ffi::avformat_init_output(output.as_mut_ptr(), std::ptr::null_mut()) };
     if result < 0 {
         return av("initialize muxer", Err(ffmpeg::Error::from(result)));
     }
     // SAFETY: free only output's owned dictionary, then deep-copy input's live
     // dictionary. Context owns replacement; allocation error propagated.
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage -- FFI call to av_dict_free and av_dict_copy on AVFormatContext.metadata, because ffmpeg-next 9.1.0 Output::set_metadata leaks an existing dictionary and ignores copy errors; proof in the SAFETY comment above (HISS-09); category D, expires 2027-03-24, ends when ffmpeg-next replaces output metadata without leaking and propagates av_dict_copy errors
     let result = unsafe {
         let dst = output.as_mut_ptr();
         ffmpeg::ffi::av_dict_free(&raw mut (*dst).metadata);

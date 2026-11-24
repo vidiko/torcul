@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: EUPL-1.2
 """Unit tests for pinned CI FFmpeg installation and workflow wiring."""
 
+import hashlib
 import io
 import os
 import re
@@ -99,6 +100,65 @@ class InstallFfmpegTests(unittest.TestCase):
                     re.MULTILINE,
                 )
             )
+
+    def test_release_url_allowlist_accepts_pinned_ffmpeg_url(self):
+        """FFMPEG_URL passes require_release_url and download_and_verify."""
+        installer = load_tool("ci/install_ffmpeg.py")
+        self.assertIsNone(installer.require_release_url(installer.FFMPEG_URL))
+        payload = b"pinned-ffmpeg-archive-bytes"
+        expected = hashlib.sha256(payload).hexdigest()
+        with tempfile.TemporaryDirectory() as directory:
+            archive = Path(directory) / "ffmpeg.tar.xz"
+            with mock.patch.object(
+                installer.urllib.request,
+                "urlopen",
+                return_value=io.BytesIO(payload),
+            ) as mocked_urlopen:
+                installer.download_and_verify(
+                    installer.FFMPEG_URL, archive, expected
+                )
+            mocked_urlopen.assert_called_once_with(
+                installer.FFMPEG_URL, timeout=installer.NETWORK_TIMEOUT_S
+            )
+            self.assertEqual(archive.read_bytes(), payload)
+
+    def test_release_url_allowlist_rejects_disallowed_urls_before_urlopen(self):
+        """Disallowed schemes, hosts, credentials and ports fail before urlopen."""
+        installer = load_tool("ci/install_ffmpeg.py")
+        rejected = (
+            "http://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz",
+            "file:///etc/passwd",
+            "ftp://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz",
+            "https://ffmpeg.org.evil.example/releases/ffmpeg-9.0.2.tar.xz",
+            "https://sub.ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz",
+            "https://user@ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz",
+            "https://:secret@ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz",
+            "https://@ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz",
+            "https://ffmpeg.org:8443/releases/ffmpeg-9.0.2.tar.xz",
+            "https://ffmpeg.org:443/releases/ffmpeg-9.0.2.tar.xz",
+            "https://ffmpeg.org:/releases/ffmpeg-9.0.2.tar.xz",
+            "https:///releases/ffmpeg-9.0.2.tar.xz",
+            "",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            archive = Path(directory) / "never-written.tar.xz"
+            for url in rejected:
+                with self.subTest(url=url):
+                    with (
+                        mock.patch.object(
+                            installer.urllib.request, "urlopen"
+                        ) as mocked_urlopen,
+                        self.assertRaises(ValueError) as raised,
+                    ):
+                        installer.download_and_verify(
+                            url, archive, installer.FFMPEG_SHA256
+                        )
+                    self.assertIn(url, str(raised.exception))
+                    mocked_urlopen.assert_not_called()
+                    self.assertFalse(archive.exists())
+                    with self.assertRaises(ValueError) as direct:
+                        installer.require_release_url(url)
+                    self.assertIn(url, str(direct.exception))
 
 
 if __name__ == "__main__":

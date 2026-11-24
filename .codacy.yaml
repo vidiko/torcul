@@ -1,0 +1,11 @@
+---
+# SPDX-FileCopyrightText: 2026 Lusoris <lusoris@pm.me>
+# SPDX-License-Identifier: EUPL-1.2
+#
+# Codacy analysis scope.
+engines:
+  # Exception: file Cargo.lock, rule Lizard_file-nloc-medium, reason: Cargo writes the lockfile and Lizard
+  # measures it as code; category D, entered 2026-11-24, expires 2027-03-24.
+  lizard:
+    exclude_paths:
+      - "Cargo.lock"
