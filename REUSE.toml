@@ -8,7 +8,7 @@ version = 1
 
 # The root licence text and files that cannot carry a header of their own.
 [[annotations]]
-path = ["LICENSE", ".gitignore", "README.md"]
+path = ["LICENSE", ".gitignore", "README.md", "renovate.json"]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 Lusoris <lusoris@pm.me>"
 SPDX-License-Identifier = "EUPL-1.2"
@@ -34,6 +34,7 @@ path = [
     "docs/**",
     "lua/**",
     ".clang-tidy",
+    ".coderabbit.yaml",
     ".dir-locals.el",
     ".editorconfig",
     ".gitattributes",
