@@ -74,6 +74,15 @@ pub fn fixture_lock_path() -> PathBuf {
         .join(format!("{}-fixtures.lock", env!("CARGO_CRATE_NAME")))
 }
 
+/// Exclusive non-blocking lock within `deadline`: `true` = lock taken, `false` = held elsewhere.
+pub fn try_lock_within(file: &fs::File, deadline: Deadline) -> std::io::Result<bool> {
+    deadline.run(|| match file.try_lock() {
+        Ok(()) => Ok(true),
+        Err(fs::TryLockError::WouldBlock) => Ok(false),
+        Err(fs::TryLockError::Error(err)) => Err(err),
+    })
+}
+
 fn acquire_fixture_lock(lock_path: &Path) -> fs::File {
     let deadline = Deadline::new();
     let file = deadline
@@ -86,10 +95,10 @@ fn acquire_fixture_lock(lock_path: &Path) -> fs::File {
         })
         .unwrap();
     for _ in 0..LOCK_POLLS {
-        match file.try_lock() {
-            Ok(()) => return file,
-            Err(fs::TryLockError::WouldBlock) => std::thread::sleep(LOCK_POLL),
-            Err(fs::TryLockError::Error(err)) => {
+        match try_lock_within(&file, Deadline::new()) {
+            Ok(true) => return file,
+            Ok(false) => std::thread::sleep(LOCK_POLL),
+            Err(err) => {
                 panic!("failed to lock {}: {err}", lock_path.display());
             }
         }

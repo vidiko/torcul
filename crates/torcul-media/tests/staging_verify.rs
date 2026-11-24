@@ -7,7 +7,7 @@ use std::{
     time::{Duration, Instant},
 };
 use support::*;
-use torcul_media::{MUXER_WRITTEN_TAGS, probe, remux, snapshot, verify};
+use torcul_media::{MUXER_WRITTEN_TAGS, io::Deadline, probe, remux, snapshot, verify};
 use torcul_policy::{TitleMeta, plan};
 
 #[test]
@@ -333,17 +333,55 @@ fn fixtures_dir_lives_under_cargo_target_tmpdir() {
 fn fixtures_holds_exclusive_cross_process_lock() {
     let _fx = fixtures();
     let lock_path = fixture_lock_path();
-    let second = fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(false)
-        .open(&lock_path)
+    let second = Deadline::new()
+        .run(|| {
+            fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(false)
+                .open(&lock_path)
+        })
         .unwrap();
     assert!(
-        matches!(second.try_lock(), Err(fs::TryLockError::WouldBlock)),
+        matches!(try_lock_within(&second, Deadline::new()), Ok(false)),
         "expected active fixture lock on {}",
         lock_path.display()
     );
+}
+
+#[test]
+fn try_lock_within_acquires_contends_and_honors_expired_deadline() {
+    let temp = Deadline::new().run(tempfile::tempdir).unwrap();
+    let lock_path = temp.path().join("helper.lock");
+    let open_lock = || {
+        Deadline::new()
+            .run(|| {
+                fs::OpenOptions::new()
+                    .create(true)
+                    .write(true)
+                    .truncate(false)
+                    .open(&lock_path)
+            })
+            .unwrap()
+    };
+
+    let first = open_lock();
+    assert!(matches!(try_lock_within(&first, Deadline::new()), Ok(true)));
+
+    let second = open_lock();
+    assert!(matches!(
+        try_lock_within(&second, Deadline::new()),
+        Ok(false)
+    ));
+
+    drop(first);
+    let expired = Deadline::with_timeout(Duration::ZERO).unwrap();
+    let err = try_lock_within(&second, expired).unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::TimedOut);
+
+    let third = open_lock();
+    assert!(matches!(try_lock_within(&third, Deadline::new()), Ok(true)));
+    drop(second);
 }
 
 #[test]
