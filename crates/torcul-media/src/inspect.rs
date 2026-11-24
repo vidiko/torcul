@@ -3,7 +3,7 @@
 use crate::{
     Error, Result,
     error::{av, fs},
-    io::{Deadline, open_regular},
+    io::{Deadline, TimedFile, open_regular},
     model::{ChapterRecord, MediaSnapshot, StreamSnapshot, Tags, TimeBase},
     packets,
 };
@@ -75,16 +75,20 @@ pub fn snapshot(path: &Path) -> Result<MediaSnapshot> {
 }
 
 pub(crate) fn open(path: &Path, deadline: Deadline) -> Result<format::context::Input> {
-    fs("validate media path", open_regular(path, deadline))?;
+    let file = fs("validate media path", open_regular(path, deadline))?;
     let canonical = fs("resolve media path", deadline.run(|| path.canonicalize()))?;
     let text = canonical
         .to_str()
         .filter(|s| !s.contains('\0'))
         .ok_or_else(|| Error::Invalid("media path must be UTF-8 without NUL".into()))?;
     av("initialize FFmpeg", ffmpeg::init())?;
+    let io = av(
+        "create seekable input I/O",
+        format::context::StreamIo::from_read_seek(TimedFile { file, deadline }),
+    )?;
     av(
         "open input with deadline",
-        format::input_with_interrupt(&text, move || deadline.expired()),
+        format::input_from_stream_with_interrupt(io, Some(text), None, move || deadline.expired()),
     )
 }
 
@@ -152,4 +156,40 @@ pub(crate) fn tags(dictionary: ffmpeg::DictionaryRef<'_>) -> Tags {
         .iter()
         .map(|(k, v)| (k.to_owned(), v.to_owned()))
         .collect()
+}
+
+#[cfg(test)]
+mod inspect_tests {
+    use super::*;
+    use crate::io::{reset_timed_reads, timed_reads};
+    use std::time::Duration;
+
+    #[test]
+    fn open_demuxes_via_validated_timed_file_handle() {
+        let temp = tempfile::tempdir().unwrap();
+        let srt = temp.path().join("sample.srt");
+        std::fs::write(&srt, b"1\n00:00:00,000 --> 00:00:01,000\nhello\n").unwrap();
+
+        reset_timed_reads();
+        let probed = probe(&srt).unwrap();
+        assert_eq!(probed.tracks.len(), 1);
+        assert!(
+            timed_reads() > 0,
+            "FFmpeg open and probe must read through TimedFile"
+        );
+
+        let expired = Deadline::with_timeout(Duration::ZERO).unwrap();
+        assert!(open(&srt, expired).is_err());
+
+        let empty = temp.path().join("empty.srt");
+        std::fs::write(&empty, b"").unwrap();
+        assert!(probe(&empty).is_err());
+
+        #[cfg(unix)]
+        {
+            let link = temp.path().join("link.srt");
+            std::os::unix::fs::symlink(&srt, &link).unwrap();
+            assert!(probe(&link).is_err());
+        }
+    }
 }

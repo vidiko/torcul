@@ -72,16 +72,64 @@ impl Deadline {
     }
 }
 
-/// Read-only opening refuses devices, sockets, symlinks and FIFOs before opening.
+/// Read-only opening refuses devices, sockets, symlinks and FIFOs.
+///
+/// Unix opens with `O_NOFOLLOW | O_NONBLOCK` and re-checks `fstat` on the
+/// descriptor so a swap after `symlink_metadata` cannot land on a symlink,
+/// FIFO, device, socket or directory. Non-Unix targets lack `O_NOFOLLOW` in
+/// `std`, so they pair the pre-open `symlink_metadata` check with a post-open
+/// descriptor `metadata` `is_file` check.
 pub fn open_regular(path: &Path, deadline: Deadline) -> std::io::Result<File> {
     let meta = deadline.run(|| std::fs::symlink_metadata(path))?;
-    if !meta.file_type().is_file() {
-        return Err(std::io::Error::new(
+    ensure_regular_metadata(&meta)?;
+    open_regular_fd(path, deadline)
+}
+
+pub(crate) fn open_regular_fd(path: &Path, deadline: Deadline) -> std::io::Result<File> {
+    let file = deadline.run(|| open_read_only(path))?;
+    let meta = deadline.run(|| file.metadata())?;
+    ensure_regular_metadata(&meta)?;
+    Ok(file)
+}
+
+fn ensure_regular_metadata(meta: &std::fs::Metadata) -> std::io::Result<()> {
+    if meta.file_type().is_file() {
+        Ok(())
+    } else {
+        Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             "expected regular file (no symlinks)",
-        ));
+        ))
     }
-    deadline.run(|| File::open(path))
+}
+
+#[cfg(unix)]
+fn open_read_only(path: &Path) -> std::io::Result<File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+}
+
+#[cfg(not(unix))]
+fn open_read_only(path: &Path) -> std::io::Result<File> {
+    std::fs::OpenOptions::new().read(true).open(path)
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static TIMED_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn reset_timed_reads() {
+    TIMED_READS.with(|c| c.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn timed_reads() -> usize {
+    TIMED_READS.with(std::cell::Cell::get)
 }
 
 pub(crate) struct TimedFile {
@@ -91,6 +139,8 @@ pub(crate) struct TimedFile {
 
 impl Read for TimedFile {
     fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        #[cfg(test)]
+        TIMED_READS.with(|c| c.set(c.get().saturating_add(1)));
         self.deadline.run(|| self.file.read(buffer))
     }
 }
@@ -138,11 +188,9 @@ pub fn same_device(source_dev: u64, staging_dev: u64) -> Result<()> {
     Ok(())
 }
 
+/// Device of the directory a path resolves to.
 pub fn path_dev(path: &Path, deadline: Deadline) -> Result<u64> {
-    let meta = fs(
-        "stat path device",
-        deadline.run(|| std::fs::symlink_metadata(path)),
-    )?;
+    let meta = fs("stat path device", deadline.run(|| std::fs::metadata(path)))?;
     metadata_dev_ino_nlink(&meta).map(|(dev, _, _)| dev)
 }
 
@@ -166,9 +214,7 @@ pub fn fingerprint(path: &Path) -> Result<Fingerprint> {
 }
 
 pub(crate) fn ensure_unchanged_stat(before: FileStat, after: FileStat) -> Result<()> {
-    if (before.dev, before.ino, before.size, before.mtime_ns)
-        != (after.dev, after.ino, after.size, after.mtime_ns)
-    {
+    if before != after {
         return Err(Error::Invalid("source changed while hashing".into()));
     }
     Ok(())

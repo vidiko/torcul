@@ -7,11 +7,12 @@ use std::io::{Cursor, Read, Seek, SeekFrom};
 pub(crate) const MAX_BOX_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_BOXES: usize = 1_000_000;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct Raw {
     pub kind: FourCC,
     pub body: Vec<u8>,
 }
+#[derive(Debug)]
 pub(crate) struct Location {
     pub kind: FourCC,
     pub start: u64,
@@ -21,6 +22,10 @@ pub(crate) struct Location {
 
 pub(crate) fn index(file: &mut TimedFile) -> Result<Vec<Location>> {
     let size = fs("stat MP4", file.deadline.run(|| file.file.metadata()))?.len();
+    index_with_size(file, size)
+}
+
+pub(crate) fn index_with_size(file: &mut TimedFile, size: u64) -> Result<Vec<Location>> {
     let mut position = fs("seek MP4 start", file.seek(SeekFrom::Start(0)))?;
     let mut boxes = Vec::new();
     for _ in 0..MAX_BOXES {
@@ -29,7 +34,10 @@ pub(crate) fn index(file: &mut TimedFile) -> Result<Vec<Location>> {
         }
         let header = Header::read_from(file)?;
         let body = fs("MP4 header position", file.stream_position())?;
-        let length = header.size.map_or(size - body, |n| n as u64);
+        let remaining = size
+            .checked_sub(body)
+            .ok_or_else(|| Error::Invalid("MP4 box header exceeds file".into()))?;
+        let length = header.size.map_or(remaining, |n| n as u64);
         let end = body
             .checked_add(length)
             .filter(|end| *end <= size)
@@ -119,4 +127,56 @@ pub(crate) fn metadata(source: &[Raw], target: &mut Vec<Raw>) {
 }
 fn is_metadata(kind: FourCC) -> bool {
     kind == FourCC::new(b"udta") || kind == FourCC::new(b"meta")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::io::Deadline;
+    use std::fs::File;
+
+    fn timed_over_bytes(dir: &std::path::Path, name: &str, bytes: &[u8]) -> TimedFile {
+        let path = dir.join(name);
+        std::fs::write(&path, bytes).unwrap();
+        TimedFile {
+            file: File::open(&path).unwrap(),
+            deadline: Deadline::new(),
+        }
+    }
+
+    #[test]
+    fn index_handles_valid_boxes_empty_and_oversized_headers() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut valid_bytes = encode(&Raw {
+            kind: FourCC::new(b"ftyp"),
+            body: b"isom\0\0\x02\0".to_vec(),
+        })
+        .unwrap();
+        valid_bytes.extend(
+            encode(&Raw {
+                kind: FourCC::new(b"free"),
+                body: Vec::new(),
+            })
+            .unwrap(),
+        );
+        let mut valid = timed_over_bytes(temp.path(), "valid.mp4", &valid_bytes);
+        let indexed = index(&mut valid).unwrap();
+        assert_eq!(indexed.len(), 2);
+        assert_eq!(indexed[0].kind, FourCC::new(b"ftyp"));
+        assert_eq!(indexed[1].body, indexed[1].end);
+
+        let mut empty = timed_over_bytes(temp.path(), "empty.mp4", b"");
+        assert!(index(&mut empty).unwrap().is_empty());
+
+        let mut truncated = timed_over_bytes(temp.path(), "short.mp4", b"\0\0\0\x10");
+        assert!(index(&mut truncated).is_err());
+
+        let mut open_ended = timed_over_bytes(temp.path(), "open.mp4", b"\0\0\0\0mdat");
+        let err = index_with_size(&mut open_ended, 4).unwrap_err();
+        assert!(err.to_string().contains("MP4 box header exceeds file"));
+
+        let mut sized = timed_over_bytes(temp.path(), "sized.mp4", b"\0\0\0\x08free");
+        let err = index_with_size(&mut sized, 4).unwrap_err();
+        assert!(err.to_string().contains("MP4 box header exceeds file"));
+    }
 }

@@ -319,3 +319,142 @@ fn explicit_matroska_cover_mapping() {
         ]
     );
 }
+
+#[test]
+fn compare_packets_caps_mismatch_messages_at_sixteen() {
+    let tb = TimeBase { num: 1, den: 1000 };
+    let src: Vec<_> = (0..1000)
+        .map(|i| PacketRecord {
+            pts: Some(i * 40),
+            dts: Some(i * 40),
+            ..sample_packet()
+        })
+        .collect();
+
+    let mut f = Vec::new();
+    compare_packets(tb, &src, tb, &src, "s0", &mut f);
+    assert!(f.is_empty(), "{f:?}");
+
+    let mut dst_16 = src.clone();
+    for pkt in dst_16.iter_mut().take(16) {
+        pkt.pts = pkt.pts.map(|v| v + 10);
+    }
+    let mut f = Vec::new();
+    compare_packets(tb, &src, tb, &dst_16, "s0", &mut f);
+    assert_eq!(f.len(), 16, "{f:?}");
+    assert!(f.iter().all(|m| !m.contains("packet-mismatches")), "{f:?}");
+
+    let mut dst_17 = dst_16;
+    dst_17[16].pts = dst_17[16].pts.map(|v| v + 10);
+    let mut f = Vec::new();
+    compare_packets(tb, &src, tb, &dst_17, "s0", &mut f);
+    assert_eq!(f.len(), 17, "{f:?}");
+    assert_eq!(
+        f.last().map(String::as_str),
+        Some("s0-packet-mismatches: 17 total, first 16 listed")
+    );
+
+    let dst_1000: Vec<_> = src
+        .iter()
+        .map(|p| PacketRecord {
+            pts: p.pts.map(|v| v + 10),
+            ..p.clone()
+        })
+        .collect();
+    let mut f = Vec::new();
+    compare_packets(tb, &src, tb, &dst_1000, "s0", &mut f);
+    assert_eq!(f.len(), 17, "{f:?}");
+    assert!(f.last().unwrap().contains("1000 total"), "{f:?}");
+}
+
+#[test]
+fn skip_samples_side_data_value_mismatch_and_equality() {
+    let tb = TimeBase { num: 1, den: 1000 };
+    let skip_a = PacketRecord {
+        side_data: vec![SideDataRecord {
+            kind: SideDataKind::SkipSamples,
+            data: vec![0, 1, 0, 0, 0, 0, 0, 0, 0, 0].into_boxed_slice(),
+        }]
+        .into_boxed_slice(),
+        ..sample_packet()
+    };
+    let skip_b = PacketRecord {
+        side_data: vec![SideDataRecord {
+            kind: SideDataKind::SkipSamples,
+            data: vec![0, 2, 0, 0, 0, 0, 0, 0, 0, 0].into_boxed_slice(),
+        }]
+        .into_boxed_slice(),
+        ..sample_packet()
+    };
+
+    let mut f = Vec::new();
+    compare_packets(
+        tb,
+        std::slice::from_ref(&skip_a),
+        tb,
+        std::slice::from_ref(&skip_a),
+        "s0",
+        &mut f,
+    );
+    assert!(f.is_empty(), "{f:?}");
+
+    compare_packets(
+        tb,
+        std::slice::from_ref(&skip_a),
+        tb,
+        std::slice::from_ref(&skip_b),
+        "s0",
+        &mut f,
+    );
+    assert!(
+        f.iter().any(|m| m.contains("side-data-bytes:SkipSamples")),
+        "{f:?}"
+    );
+
+    let mut f = Vec::new();
+    compare_packets(tb, &[skip_a], tb, &[sample_packet()], "s0", &mut f);
+    assert!(f.iter().any(|m| m.contains("side-data-types")), "{f:?}");
+}
+
+#[test]
+fn compare_packets_routes_side_data_through_mismatch_cap() {
+    let tb = TimeBase { num: 1, den: 1000 };
+    let pair_src = vec![
+        PacketRecord {
+            side_data: vec![
+                SideDataRecord {
+                    kind: SideDataKind::DisplayMatrix,
+                    data: vec![1].into_boxed_slice(),
+                },
+                SideDataRecord {
+                    kind: SideDataKind::SkipSamples,
+                    data: vec![2].into_boxed_slice(),
+                },
+            ]
+            .into_boxed_slice(),
+            ..sample_packet()
+        };
+        10
+    ];
+    let pair_dst = vec![
+        PacketRecord {
+            side_data: vec![
+                SideDataRecord {
+                    kind: SideDataKind::DisplayMatrix,
+                    data: vec![9].into_boxed_slice(),
+                },
+                SideDataRecord {
+                    kind: SideDataKind::SkipSamples,
+                    data: vec![8].into_boxed_slice(),
+                },
+            ]
+            .into_boxed_slice(),
+            ..sample_packet()
+        };
+        10
+    ];
+    let mut f = Vec::new();
+    compare_packets(tb, &pair_src, tb, &pair_dst, "s0", &mut f);
+    assert_eq!(f.len(), 17, "{f:?}");
+    assert!(f.last().unwrap().contains("20 total"), "{f:?}");
+}

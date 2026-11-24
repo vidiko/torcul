@@ -228,7 +228,9 @@ unsafe fn raw_side_data(
     out
 }
 
-fn relevant_side_data_kind(raw: ffmpeg::ffi::AVPacketSideDataType) -> Option<SideDataKind> {
+pub(crate) fn relevant_side_data_kind(
+    raw: ffmpeg::ffi::AVPacketSideDataType,
+) -> Option<SideDataKind> {
     use ffmpeg::ffi::AVPacketSideDataType as Kind;
     match raw {
         Kind::AV_PKT_DATA_DISPLAYMATRIX => Some(SideDataKind::DisplayMatrix),
@@ -237,6 +239,7 @@ fn relevant_side_data_kind(raw: ffmpeg::ffi::AVPacketSideDataType) -> Option<Sid
         }
         Kind::AV_PKT_DATA_CONTENT_LIGHT_LEVEL => Some(SideDataKind::ContentLightLevel),
         Kind::AV_PKT_DATA_DOVI_CONF => Some(SideDataKind::DoviConf),
+        Kind::AV_PKT_DATA_SKIP_SAMPLES => Some(SideDataKind::SkipSamples),
         _ => None,
     }
 }
@@ -271,4 +274,19 @@ pub(crate) fn picture_attachment(
         parameters.codec_type = ffmpeg::ffi::AVMediaType::AVMEDIA_TYPE_ATTACHMENT;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ffmpeg::ffi::AVPacketSideDataType as Kind;
+
+    #[test]
+    fn skip_samples_side_data_kind_is_mapped() {
+        assert_eq!(
+            relevant_side_data_kind(Kind::AV_PKT_DATA_SKIP_SAMPLES),
+            Some(SideDataKind::SkipSamples)
+        );
+        assert_eq!(relevant_side_data_kind(Kind::AV_PKT_DATA_PALETTE), None);
+    }
 }

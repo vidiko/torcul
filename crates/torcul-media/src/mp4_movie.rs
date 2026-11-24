@@ -7,6 +7,9 @@ use crate::{
 use mp4_atom::{Atom, Co64, FourCC, Stco, Tkhd};
 use std::collections::BTreeMap;
 
+#[cfg(test)]
+mod mp4_movie_tests;
+
 /// Fixed container depth: moov -> trak -> mdia -> minf -> stbl. No recursion.
 pub(crate) fn movie(
     source: &Raw,

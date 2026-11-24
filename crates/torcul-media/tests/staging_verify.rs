@@ -15,10 +15,7 @@ fn muxer_written_tags_allowlist_entries_proven_on_fixture() {
     assert_eq!(MUXER_WRITTEN_TAGS.len(), 2);
     let tmp = tempfile::tempdir().unwrap();
     let piped = tmp.path().join("piped.mkv");
-    pipe_matroska_without_duration_tags(
-        &fixtures().dir.path().join("f07_default_dropped.mkv"),
-        &piped,
-    );
+    pipe_matroska_without_duration_tags(&fixtures().dir.join("f07_default_dropped.mkv"), &piped);
     let src_snap = snapshot(&piped).unwrap();
     assert!(
         !src_snap.tags.contains_key("ENCODER"),
@@ -59,47 +56,40 @@ fn muxer_written_tags_allowlist_entries_proven_on_fixture() {
 }
 
 fn pipe_matroska_without_duration_tags(src: &Path, dst: &Path) {
-    use wait_timeout::ChildExt;
-    let out_file = fs::File::create(dst).unwrap();
-    let mut child = std::process::Command::new("ffmpeg")
-        .args(["-nostdin", "-loglevel", "error", "-i"])
-        .arg(src)
-        .args([
-            "-map",
-            "0",
-            "-map_metadata",
-            "-1",
-            "-metadata:s:a:0",
-            "language=fre",
-            "-disposition:a:0",
-            "default",
-            "-metadata:s:a:1",
-            "language=eng",
-            "-metadata:s:s:0",
-            "language=eng",
-            "-fflags",
-            "+bitexact",
-            "-c",
-            "copy",
-            "-f",
-            "matroska",
-            "pipe:1",
-        ])
-        .stdin(std::process::Stdio::null())
-        .stdout(out_file)
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
-    let status = child
-        .wait_timeout(Duration::from_secs(60))
-        .unwrap()
-        .unwrap();
-    assert!(status.success());
+    let out = execute_to(
+        std::process::Command::new("ffmpeg")
+            .args(["-nostdin", "-loglevel", "error", "-i"])
+            .arg(src)
+            .args([
+                "-map",
+                "0",
+                "-map_metadata",
+                "-1",
+                "-metadata:s:a:0",
+                "language=fre",
+                "-disposition:a:0",
+                "default",
+                "-metadata:s:a:1",
+                "language=eng",
+                "-metadata:s:s:0",
+                "language=eng",
+                "-fflags",
+                "+bitexact",
+                "-c",
+                "copy",
+                "-f",
+                "matroska",
+                "pipe:1",
+            ]),
+        dst,
+        Duration::from_secs(60),
+    );
+    assert!(out.success, "{}", out.stderr);
 }
 
 #[test]
 fn verify_rejects_added_tag_in_staging() {
-    let src = fixtures().dir.path().join("f07_default_dropped.mkv");
+    let src = fixtures().dir.join("f07_default_dropped.mkv");
     let tmp = tempfile::tempdir().unwrap();
     let staged = tmp.path().join("staged.mkv");
     let p = plan(
@@ -148,14 +138,14 @@ fn invalid_and_truncated_inputs() {
     fs::write(&text, b"not media").unwrap();
     assert!(probe(&text).is_err());
     let truncated = temp.path().join("truncated.mkv");
-    let full = fs::read(fixtures().dir.path().join("f01_movie_en_de_extra.mkv")).unwrap();
+    let full = fs::read(fixtures().dir.join("f01_movie_en_de_extra.mkv")).unwrap();
     fs::write(&truncated, &full[..4096]).unwrap();
     assert!(probe(&truncated).is_err());
 }
 
 #[test]
 fn tampered_packet_fails_lossless_proof() {
-    let src = fixtures().dir.path().join("f08_mp4_en_fr.mp4");
+    let src = fixtures().dir.join("f08_mp4_en_fr.mp4");
     let tmp = tempfile::tempdir().unwrap();
     let dst = tmp.path().join("tampered.mp4");
     let p = plan(
@@ -202,7 +192,7 @@ fn tamper_packet(path: &Path) {
 
 #[test]
 fn wrong_plan_fails_verification() {
-    let src = fixtures().dir.path().join("f02_anime_ja.mkv");
+    let src = fixtures().dir.join("f02_anime_ja.mkv");
     let tmp = tempfile::tempdir().unwrap();
     let anime = plan(
         &probe(&src).unwrap(),
@@ -227,7 +217,7 @@ fn wrong_plan_fails_verification() {
 
 #[test]
 fn existing_staging_not_clobbered() {
-    let src = fixtures().dir.path().join("f07_default_dropped.mkv");
+    let src = fixtures().dir.join("f07_default_dropped.mkv");
     let tmp = tempfile::tempdir().unwrap();
     let dst = tmp.path().join("existing.mkv");
     fs::write(&dst, b"retain me").unwrap();
@@ -245,7 +235,7 @@ fn existing_staging_not_clobbered() {
 
 #[test]
 fn invalid_plan_leaves_no_partial() {
-    let src = fixtures().dir.path().join("f02_anime_ja.mkv");
+    let src = fixtures().dir.join("f02_anime_ja.mkv");
     let facts = probe(&src).unwrap();
     let mut p = plan(
         &facts,
@@ -278,4 +268,106 @@ fn partial_cleanup_after_operation_deadline() {
     assert!(torcul_media::io::Deadline::with_timeout(Duration::MAX).is_err());
     deadline.remove_partial(&partial).unwrap();
     assert!(!partial.exists());
+}
+
+#[test]
+fn default_audio_change_rejects_invalid_targets() {
+    let src = fixtures().dir.join("f07_default_dropped.mkv");
+    let facts = probe(&src).unwrap();
+    let base = plan(
+        &facts,
+        &TitleMeta {
+            original: Some("en".into()),
+            anime: false,
+        },
+    )
+    .unwrap();
+    let (dropped_from, _) = base.default_audio_change.unwrap();
+    let video_idx = facts
+        .tracks
+        .iter()
+        .find(|t| t.kind == torcul_policy::TrackKind::Video)
+        .unwrap()
+        .index;
+
+    let temp = tempfile::tempdir().unwrap();
+    let valid_dst = temp.path().join("valid.mkv");
+    remux(&src, &base, &valid_dst).unwrap();
+    assert!(verify(&src, &base, &valid_dst).unwrap().pass);
+
+    for (label, bad_to) in [
+        ("dropped", dropped_from),
+        ("video", video_idx),
+        ("boundary-oob", facts.tracks.len()),
+        ("max-oob", usize::MAX),
+    ] {
+        let mut bad = base.clone();
+        bad.default_audio_change = Some((dropped_from, bad_to));
+        bad.needs_remux = true;
+        let dst = temp.path().join(format!("{label}.mkv"));
+        assert!(
+            remux(&src, &bad, &dst).is_err(),
+            "{label} target {bad_to} must be rejected"
+        );
+        assert!(!dst.exists(), "{label} must leave no staging file");
+    }
+}
+
+#[test]
+fn fixtures_dir_lives_under_cargo_target_tmpdir() {
+    let expected = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("{}-fixtures", env!("CARGO_CRATE_NAME")));
+    assert_eq!(&*fixtures().dir, expected.as_path());
+
+    let scratch = Path::new(env!("CARGO_TARGET_TMPDIR")).join("staging_verify-reset-check");
+    fs::create_dir_all(&scratch).unwrap();
+    let stale = scratch.join("stale.txt");
+    fs::write(&stale, b"leftover").unwrap();
+    reset_fixture_dir(&scratch);
+    assert!(scratch.is_dir());
+    assert!(!stale.exists());
+    fs::remove_dir_all(&scratch).unwrap();
+}
+
+#[test]
+fn execute_to_streams_stdout_drains_large_stderr_and_kills_on_timeout() {
+    let temp = tempfile::tempdir().unwrap();
+    let out_path = temp.path().join("stdout.bin");
+    let ok = execute_to(
+        std::process::Command::new("python3").args([
+            "-I",
+            "-c",
+            "import sys; sys.stdout.buffer.write(bytes([0, 255, 111, 107])); sys.stderr.write('e' * 131072)",
+        ]),
+        &out_path,
+        Duration::from_secs(10),
+    );
+    assert!(ok.success);
+    assert_eq!(fs::read(&out_path).unwrap(), b"\x00\xffok");
+    assert!(ok.stderr.ends_with(&"e".repeat(131_072)));
+
+    let fail_path = temp.path().join("fail.bin");
+    let fail = execute_to(
+        std::process::Command::new("python3").args([
+            "-I",
+            "-c",
+            "import sys; sys.stderr.write('boom'); sys.exit(2)",
+        ]),
+        &fail_path,
+        Duration::from_secs(10),
+    );
+    assert!(!fail.success);
+    assert!(fail.stderr.ends_with("boom"));
+
+    let timeout_path = temp.path().join("timeout.bin");
+    let started = Instant::now();
+    let panicked = std::panic::catch_unwind(|| {
+        execute_to(
+            std::process::Command::new("python3").args(["-I", "-c", "import time; time.sleep(10)"]),
+            &timeout_path,
+            Duration::from_millis(50),
+        );
+    });
+    assert!(panicked.is_err());
+    assert!(started.elapsed() < Duration::from_secs(5));
 }

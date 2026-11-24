@@ -869,6 +869,7 @@ name = "torcul-media"
 version = "0.1.0"
 dependencies = [
  "ffmpeg-next",
+ "libc",
  "mp4-atom",
  "serde",
  "serde_json",

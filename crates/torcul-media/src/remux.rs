@@ -117,6 +117,29 @@ pub(crate) fn validate_plan(input: &format::context::Input, plan: &Plan) -> Resu
     {
         return Err(Error::Invalid("inconsistent needs_remux".into()));
     }
+    if let Some((_, to)) = plan.default_audio_change {
+        let Some(stream) = input.stream(to) else {
+            return Err(Error::Invalid(
+                "default_audio_change target stream out of range".into(),
+            ));
+        };
+        if !plan.decisions[to].keep || stream.parameters().medium() != ffmpeg::media::Type::Audio {
+            return Err(Error::Invalid(
+                "default_audio_change target must be a kept audio stream".into(),
+            ));
+        }
+    }
+    if matches!(input.format().name(), "mov,mp4,m4a,3gp,3g2,mj2" | "mp4")
+        && input.streams().any(|s| {
+            !plan.decisions[s.index()].keep
+                && s.disposition()
+                    .contains(format::stream::Disposition::ATTACHED_PIC)
+        })
+    {
+        return Err(Error::Invalid(
+            "dropping an MP4 cover is unsupported: restored metadata would keep covr".into(),
+        ));
+    }
     Ok(())
 }
 fn container(input: &format::context::Input) -> Result<&'static str> {

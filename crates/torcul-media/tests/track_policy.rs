@@ -117,7 +117,7 @@ fn oracle_all_eleven() {
     let fx = fixtures();
     assert_eq!(fx.manifest.fixtures.len(), 11);
     for row in &fx.manifest.fixtures {
-        let facts = probe(&fx.dir.path().join(&row.name)).unwrap();
+        let facts = probe(&fx.dir.join(&row.name)).unwrap();
         let p = plan(
             &facts,
             &TitleMeta {
@@ -137,7 +137,7 @@ fn remux_and_verify_every_fixture_with_counts_and_stream_map() {
     let fx = fixtures();
     let staging = tempfile::tempdir().unwrap();
     for row in &fx.manifest.fixtures {
-        let src = fx.dir.path().join(&row.name);
+        let src = fx.dir.join(&row.name);
         let dst = staging.path().join(&row.name);
         let p = plan(
             &probe(&src).unwrap(),
@@ -178,7 +178,7 @@ fn f02_chapters_attachments_and_counts_match_oracle() {
         .find(|r| r.name == "f02_anime_ja.mkv")
         .unwrap();
     assert_eq!(row.chapters, 3);
-    let src = fx.dir.path().join(&row.name);
+    let src = fx.dir.join(&row.name);
     let tmp = tempfile::tempdir().unwrap();
     let dst = tmp.path().join(&row.name);
     let p = plan(
@@ -211,7 +211,7 @@ fn f02_negative_mutations_fail_chapter_attachment_and_drift_asserts() {
         .iter()
         .find(|r| r.name == "f02_anime_ja.mkv")
         .unwrap();
-    let src = fx.dir.path().join(&row.name);
+    let src = fx.dir.join(&row.name);
     let tmp = tempfile::tempdir().unwrap();
     let dst = tmp.path().join(&row.name);
     let p = plan(

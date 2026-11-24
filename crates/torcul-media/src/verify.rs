@@ -224,6 +224,8 @@ fn compare_track_info(
     }
 }
 
+const MAX_PACKET_MISMATCH_MESSAGES: usize = 16;
+
 pub fn compare_packets(
     src_tb: TimeBase,
     src: &[PacketRecord],
@@ -241,27 +243,59 @@ pub fn compare_packets(
         return;
     }
     let coarse = src_tb.coarser(dst_tb);
+    let mut total = 0_usize;
+    let mut scratch = Vec::new();
     for (idx, (sp, dp)) in src.iter().zip(dst).enumerate() {
-        if sp.size != dp.size {
-            failures.push(format!("{label}-pkt-{idx}-size"));
+        scratch.clear();
+        packet_mismatches(
+            (sp, src_tb),
+            (dp, dst_tb),
+            coarse,
+            (label, idx),
+            &mut scratch,
+        );
+        for msg in scratch.drain(..) {
+            total += 1;
+            if total <= MAX_PACKET_MISMATCH_MESSAGES {
+                failures.push(msg);
+            }
         }
-        if sp.key != dp.key {
-            failures.push(format!("{label}-pkt-{idx}-key"));
-        }
-        if !ts_within_one_tick(sp.pts, src_tb, dp.pts, dst_tb, coarse) {
-            failures.push(format!("{label}-pkt-{idx}-pts"));
-        }
-        if !ts_within_one_tick(sp.dts, src_tb, dp.dts, dst_tb, coarse) {
-            failures.push(format!("{label}-pkt-{idx}-dts"));
-        }
-        if !ts_within_one_tick(sp.duration, src_tb, dp.duration, dst_tb, coarse) {
-            failures.push(format!("{label}-pkt-{idx}-duration"));
-        }
+    }
+    if total > MAX_PACKET_MISMATCH_MESSAGES {
+        failures.push(format!(
+            "{label}-packet-mismatches: {total} total, first {MAX_PACKET_MISMATCH_MESSAGES} listed"
+        ));
+    }
+}
+
+fn packet_mismatches(
+    (sp, src_tb): (&PacketRecord, TimeBase),
+    (dp, dst_tb): (&PacketRecord, TimeBase),
+    coarse: TimeBase,
+    (label, idx): (&str, usize),
+    out: &mut Vec<String>,
+) {
+    if sp.size != dp.size {
+        out.push(format!("{label}-pkt-{idx}-size"));
+    }
+    if sp.key != dp.key {
+        out.push(format!("{label}-pkt-{idx}-key"));
+    }
+    if !ts_within_one_tick(sp.pts, src_tb, dp.pts, dst_tb, coarse) {
+        out.push(format!("{label}-pkt-{idx}-pts"));
+    }
+    if !ts_within_one_tick(sp.dts, src_tb, dp.dts, dst_tb, coarse) {
+        out.push(format!("{label}-pkt-{idx}-dts"));
+    }
+    if !ts_within_one_tick(sp.duration, src_tb, dp.duration, dst_tb, coarse) {
+        out.push(format!("{label}-pkt-{idx}-duration"));
+    }
+    if sp.side_data != dp.side_data {
         compare_side_data(
             &sp.side_data,
             &dp.side_data,
             &format!("{label}-pkt-{idx}-side-data"),
-            failures,
+            out,
         );
     }
 }

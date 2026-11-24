@@ -17,11 +17,15 @@ impl TimeBase {
         if num == 0 || den == 0 {
             return Self { num: 0, den: 1 };
         }
-        let divisor = gcd(num.unsigned_abs(), den.unsigned_abs()) as i32;
-        let sign = if den < 0 { -1 } else { 1 };
-        Self {
-            num: sign * (num / divisor),
-            den: sign * (den / divisor),
+        let num64 = i64::from(num);
+        let den64 = i64::from(den);
+        let divisor = i64::from(gcd(num.unsigned_abs(), den.unsigned_abs()));
+        let sign = if den64 < 0 { -1_i64 } else { 1_i64 };
+        let reduced_num = sign * (num64 / divisor);
+        let reduced_den = sign * (den64 / divisor);
+        match (i32::try_from(reduced_num), i32::try_from(reduced_den)) {
+            (Ok(n), Ok(d)) => Self { num: n, den: d },
+            _ => Self { num: 0, den: 1 },
         }
     }
 
@@ -50,6 +54,7 @@ pub enum SideDataKind {
     MasteringDisplayMetadata,
     ContentLightLevel,
     DoviConf,
+    SkipSamples,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -211,5 +216,50 @@ impl VerifyReport {
             source_packets: Vec::new(),
             staging_packets: Vec::new(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TimeBase;
+
+    #[test]
+    fn time_base_normalized_handles_min_extremes_and_signs() {
+        assert_eq!(
+            TimeBase::normalized(i32::MIN, i32::MIN),
+            TimeBase { num: 1, den: 1 }
+        );
+        assert_eq!(
+            TimeBase::normalized(i32::MIN, -1),
+            TimeBase { num: 0, den: 1 }
+        );
+        assert_eq!(
+            TimeBase::normalized(1, i32::MIN),
+            TimeBase { num: 0, den: 1 }
+        );
+        assert_eq!(TimeBase::normalized(6, -4), TimeBase { num: -3, den: 2 });
+        assert_eq!(TimeBase::normalized(0, 5), TimeBase { num: 0, den: 1 });
+        assert_eq!(TimeBase::normalized(5, 0), TimeBase { num: 0, den: 1 });
+        assert_eq!(
+            TimeBase::normalized(i32::MAX, 1),
+            TimeBase {
+                num: i32::MAX,
+                den: 1
+            }
+        );
+        assert_eq!(
+            TimeBase::normalized(i32::MIN, 1),
+            TimeBase {
+                num: i32::MIN,
+                den: 1
+            }
+        );
+        assert_eq!(
+            TimeBase::normalized(i32::MIN, -2),
+            TimeBase {
+                num: 1_073_741_824,
+                den: 1
+            }
+        );
     }
 }

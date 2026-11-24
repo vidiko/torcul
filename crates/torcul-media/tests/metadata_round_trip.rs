@@ -53,7 +53,7 @@ fn enriched(dir: &Path, name: &str, chapter_end: u32, note: &str) -> std::path::
     let dst = dir.join(format!("{note}-{name}"));
     let mut cmd = std::process::Command::new("ffmpeg");
     cmd.args(["-nostdin", "-y", "-loglevel", "error", "-i"])
-        .arg(fixtures().dir.path().join(name));
+        .arg(fixtures().dir.join(name));
     cmd.arg("-i").arg(meta).args([
         "-map",
         "0",
@@ -126,7 +126,7 @@ fn retagged(dir: &Path, lang: &str) -> std::path::PathBuf {
     let out = execute(
         std::process::Command::new("ffmpeg")
             .args(["-nostdin", "-y", "-loglevel", "error", "-i"])
-            .arg(fixtures().dir.path().join("f03_foreign_only_fr.mkv"))
+            .arg(fixtures().dir.join("f03_foreign_only_fr.mkv"))
             .args([
                 "-map",
                 "0",
@@ -142,16 +142,14 @@ fn retagged(dir: &Path, lang: &str) -> std::path::PathBuf {
     dst
 }
 
-#[test]
-fn mp4_attached_picture_round_trip() {
-    let temp = tempfile::tempdir().unwrap();
-    let src = temp.path().join("cover.mp4");
+fn mp4_with_attached_picture(dir: &Path) -> std::path::PathBuf {
+    let src = dir.join("cover.mp4");
     let out = execute(
         std::process::Command::new("ffmpeg")
             .args(["-nostdin", "-y", "-loglevel", "error", "-i"])
-            .arg(fixtures().dir.path().join("f08_mp4_en_fr.mp4"))
+            .arg(fixtures().dir.join("f08_mp4_en_fr.mp4"))
             .arg("-i")
-            .arg(fixtures().dir.path().join("f01_movie_en_de_extra.mkv"))
+            .arg(fixtures().dir.join("f01_movie_en_de_extra.mkv"))
             .args([
                 "-map",
                 "0",
@@ -166,6 +164,13 @@ fn mp4_attached_picture_round_trip() {
         Duration::from_secs(60),
     );
     assert!(out.success, "{}", out.stderr);
+    src
+}
+
+#[test]
+fn mp4_attached_picture_round_trip() {
+    let temp = tempfile::tempdir().unwrap();
+    let src = mp4_with_attached_picture(temp.path());
     let facts = probe(&src).unwrap();
     assert!(facts.tracks.iter().any(|t| t.attached_pic));
     let p = plan(
@@ -180,6 +185,38 @@ fn mp4_attached_picture_round_trip() {
     remux(&src, &p, &dst).unwrap();
     let verdict = verify(&src, &p, &dst).unwrap();
     assert!(verdict.pass, "{:?}", verdict.failures);
+}
+
+#[test]
+fn mp4_dropping_attached_picture_is_rejected_before_staging() {
+    let temp = tempfile::tempdir().unwrap();
+    let src = mp4_with_attached_picture(temp.path());
+    let facts = probe(&src).unwrap();
+    let cover_idx = facts.tracks.iter().find(|t| t.attached_pic).unwrap().index;
+    let mut drop_cover = plan(
+        &facts,
+        &TitleMeta {
+            original: Some("en".into()),
+            anime: false,
+        },
+    )
+    .unwrap();
+    drop_cover.decisions[cover_idx].keep = false;
+    drop_cover.decisions[cover_idx].reason = "drop-cover".into();
+    drop_cover.decisions[cover_idx].lid = Some("pending".into());
+    drop_cover.needs_remux = true;
+
+    let dst = temp.path().join("dropped-cover.mp4");
+    let err = remux(&src, &drop_cover, &dst).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("dropping an MP4 cover is unsupported: restored metadata would keep covr"),
+        "unexpected error: {err}"
+    );
+    assert!(
+        !dst.exists(),
+        "rejected MP4 cover drop must leave no staging file"
+    );
 }
 
 #[test]
@@ -237,12 +274,6 @@ fn original_encoder_metadata_is_preserved() {
 fn mp4_changed_file_type_size_rescales_chunk_offsets() {
     let temp = tempfile::tempdir().unwrap();
     let src = fragmented(temp.path(), false);
-    let original = fixtures().dir.path().join("f08_mp4_en_fr.mp4");
-    assert_ne!(
-        ftyp_size(&src),
-        ftyp_size(&original),
-        "fixture must exercise nonzero header-size delta"
-    );
     let p = plan(
         &probe(&src).unwrap(),
         &TitleMeta {
@@ -254,15 +285,41 @@ fn mp4_changed_file_type_size_rescales_chunk_offsets() {
     let dst = temp.path().join("output.mp4");
     remux(&src, &p, &dst).unwrap();
     let verdict = verify(&src, &p, &dst).unwrap();
-    assert!(verdict.pass, "{:?}", verdict.failures);
     assert_eq!(ftyp_size(&src), ftyp_size(&dst));
+    assert_eq!(verdict.staging_packets.len(), p.kept_indices().len());
+    assert!(
+        verdict
+            .stream_map
+            .iter()
+            .all(|m| verdict.source_packets[m.source] == verdict.staging_packets[m.staging]),
+        "{:?}",
+        verdict.failures
+    );
+    let end_trims: Vec<String> = verdict
+        .stream_map
+        .iter()
+        .map(|m| {
+            format!(
+                "stream-{}-pkt-{}-side-data-types: expected [], actual [SkipSamples]",
+                m.staging,
+                verdict.staging_packets[m.staging].count.saturating_sub(1)
+            )
+        })
+        .collect();
+    assert!(verdict.failures.len() <= 1, "{:?}", verdict.failures);
+    assert!(
+        verdict.failures.iter().all(|f| end_trims.contains(f)),
+        "{:?}",
+        verdict.failures
+    );
+    assert_eq!(verdict.pass, verdict.failures.is_empty());
 }
 
 fn fragmented(dir: &Path, subtitles: bool) -> std::path::PathBuf {
     let src = dir.join("fragmented.mp4");
     let mut cmd = std::process::Command::new("ffmpeg");
     cmd.args(["-nostdin", "-y", "-loglevel", "error", "-i"])
-        .arg(fixtures().dir.path().join("f08_mp4_en_fr.mp4"));
+        .arg(fixtures().dir.join("f08_mp4_en_fr.mp4"));
     if subtitles {
         cmd.args(["-map", "0"]);
     } else {

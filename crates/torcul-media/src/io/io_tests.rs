@@ -3,6 +3,7 @@
 use super::*;
 use std::fs;
 
+#[cfg(unix)]
 fn is_sha256_prefixed_hex(value: &str) -> bool {
     let Some(hex_part) = value.strip_prefix("sha256:") else {
         return false;
@@ -13,6 +14,7 @@ fn is_sha256_prefixed_hex(value: &str) -> bool {
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
+#[cfg(unix)]
 #[test]
 fn fingerprint_mid_file_change_with_restored_mtime_mismatches() {
     let temp = tempfile::tempdir().unwrap();
@@ -45,6 +47,7 @@ fn fingerprint_mid_file_change_with_restored_mtime_mismatches() {
     assert_ne!(mutated, initial);
 }
 
+#[cfg(unix)]
 #[test]
 fn fingerprint_mtime_only_change_and_hard_link_refused() {
     let temp = tempfile::tempdir().unwrap();
@@ -92,8 +95,117 @@ fn same_device_and_stat_race_checks() {
             mtime_ns: 4001,
             ..base
         },
+        FileStat { nlink: 2, ..base },
+        FileStat { nlink: 0, ..base },
     ] {
         let err = ensure_unchanged_stat(base, mutated).unwrap_err();
         assert_eq!(err.to_string(), "source changed while hashing");
     }
+}
+
+#[cfg(not(unix))]
+#[test]
+fn fingerprint_requires_unix_on_non_unix() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("regular.bin");
+    fs::write(&path, b"torcul-non-unix").unwrap();
+    let err = fingerprint(&path).unwrap_err();
+    assert!(
+        err.to_string().contains("requires Unix"),
+        "unexpected error: {err}"
+    );
+}
+
+#[cfg(unix)]
+fn make_fifo(path: &Path) -> std::io::Result<()> {
+    use std::process::{Command, Stdio};
+    use wait_timeout::ChildExt;
+    let mut child = Command::new("mkfifo")
+        .arg(path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+    match child.wait_timeout(Duration::from_secs(10))? {
+        Some(status) if status.success() => Ok(()),
+        Some(status) => Err(std::io::Error::other(format!("mkfifo failed: {status}"))),
+        None => {
+            child.kill()?;
+            child.wait()?;
+            Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "mkfifo timed out",
+            ))
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn open_regular_refuses_symlink_dir_socket_and_fifo_without_blocking() {
+    use std::os::unix::{fs::symlink, net::UnixListener};
+    let temp = tempfile::tempdir().unwrap();
+    let regular = temp.path().join("regular.bin");
+    fs::write(&regular, b"hello").unwrap();
+    let deadline = Deadline::new();
+
+    let mut opened = open_regular(&regular, deadline).unwrap();
+    let mut buf = Vec::new();
+    opened.read_to_end(&mut buf).unwrap();
+    assert_eq!(buf, b"hello");
+
+    let link = temp.path().join("link.bin");
+    symlink(&regular, &link).unwrap();
+    assert!(open_regular(&link, deadline).is_err());
+    assert!(open_regular_fd(&link, deadline).is_err());
+
+    let dir = temp.path().join("subdir");
+    fs::create_dir(&dir).unwrap();
+    assert!(open_regular(&dir, deadline).is_err());
+    let dir_err = open_regular_fd(&dir, deadline).unwrap_err();
+    assert_eq!(dir_err.kind(), std::io::ErrorKind::InvalidInput);
+
+    let sock = temp.path().join("test.sock");
+    let _listener = UnixListener::bind(&sock).unwrap();
+    assert!(open_regular(&sock, deadline).is_err());
+    assert!(open_regular_fd(&sock, deadline).is_err());
+
+    let fifo = temp.path().join("test.fifo");
+    make_fifo(&fifo).unwrap();
+    let started = Instant::now();
+    assert!(open_regular(&fifo, deadline).is_err());
+    let fifo_err = open_regular_fd(&fifo, deadline).unwrap_err();
+    assert!(started.elapsed() < Duration::from_secs(5));
+    assert_eq!(fifo_err.kind(), std::io::ErrorKind::InvalidInput);
+}
+
+#[cfg(unix)]
+#[test]
+fn path_dev_follows_directory_symlinks_and_rejects_missing() {
+    use std::os::unix::fs::{MetadataExt, symlink};
+    let temp = tempfile::tempdir().unwrap();
+    let target = temp.path().join("target-dir");
+    fs::create_dir(&target).unwrap();
+    let link = temp.path().join("link-dir");
+    symlink(&target, &link).unwrap();
+
+    let deadline = Deadline::new();
+    let expected = fs::metadata(&target).unwrap().dev();
+    assert_eq!(path_dev(&link, deadline).unwrap(), expected);
+
+    let manifest_link = temp.path().join("manifest-dir-link");
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    symlink(manifest_dir, &manifest_link).unwrap();
+    assert_eq!(
+        path_dev(&manifest_link, deadline).unwrap(),
+        fs::metadata(manifest_dir).unwrap().dev()
+    );
+
+    assert!(path_dev(&temp.path().join("missing"), deadline).is_err());
+    let dangling = temp.path().join("dangling");
+    symlink(temp.path().join("gone"), &dangling).unwrap();
+    assert!(path_dev(&dangling, deadline).is_err());
+
+    let expired = Deadline::with_timeout(Duration::ZERO).unwrap();
+    assert!(path_dev(&target, expired).is_err());
 }
