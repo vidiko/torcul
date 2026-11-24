@@ -77,8 +77,7 @@ impl Deadline {
 /// Unix opens with `O_NOFOLLOW | O_NONBLOCK` and re-checks `fstat` on the
 /// descriptor so a swap after `symlink_metadata` cannot land on a symlink,
 /// FIFO, device, socket or directory. Non-Unix targets lack `O_NOFOLLOW` in
-/// `std`, so they pair the pre-open `symlink_metadata` check with a post-open
-/// descriptor `metadata` `is_file` check.
+/// `std`, so `open_read_only` fails closed with `ErrorKind::Unsupported`.
 pub fn open_regular(path: &Path, deadline: Deadline) -> std::io::Result<File> {
     let meta = deadline.run(|| std::fs::symlink_metadata(path))?;
     ensure_regular_metadata(&meta)?;
@@ -113,8 +112,11 @@ fn open_read_only(path: &Path) -> std::io::Result<File> {
 }
 
 #[cfg(not(unix))]
-fn open_read_only(path: &Path) -> std::io::Result<File> {
-    std::fs::OpenOptions::new().read(true).open(path)
+fn open_read_only(_path: &Path) -> std::io::Result<File> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "no-follow regular-file open requires Unix",
+    ))
 }
 
 #[cfg(test)]

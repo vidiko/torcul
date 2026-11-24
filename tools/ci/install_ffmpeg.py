@@ -161,14 +161,23 @@ def require_release_url(url: str) -> None:
         raise ValueError(f"disallowed FFmpeg release URL: {url}")
 
 
+class ReleaseRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Re-check every redirect target against the release allowlist before following it."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        require_release_url(newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 def download_and_verify(url, archive_path, expected_sha256):
     """Download `url` under a network timeout and verify its SHA-256 digest."""
     require_release_url(url)
     digest = hashlib.sha256()
     finished = False
     with (
-        # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected, python_urlopen_rule-urllib-urlopen -- url passed require_release_url (https, host ffmpeg.org only, no port or credentials) and payload SHA-256 is verified before use; category D, expires 2027-03-24, ends when the CI runner image ships FFmpeg 9 and this installer goes
-        urllib.request.urlopen(url, timeout=NETWORK_TIMEOUT_S) as response,  # nosec B310 # url validated by require_release_url to https://ffmpeg.org only
+        urllib.request.build_opener(ReleaseRedirectHandler).open(
+            url, timeout=NETWORK_TIMEOUT_S
+        ) as response,
         open(archive_path, "wb") as handle,
     ):
         for _ in range(MAX_CHUNKS):

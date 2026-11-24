@@ -319,14 +319,31 @@ fn fixtures_dir_lives_under_cargo_target_tmpdir() {
         .join(format!("{}-fixtures", env!("CARGO_CRATE_NAME")));
     assert_eq!(&*fixtures().dir, expected.as_path());
 
-    let scratch = Path::new(env!("CARGO_TARGET_TMPDIR")).join("staging_verify-reset-check");
+    let temp = tempfile::tempdir().unwrap();
+    let scratch = temp.path().join("reset-check");
     fs::create_dir_all(&scratch).unwrap();
     let stale = scratch.join("stale.txt");
     fs::write(&stale, b"leftover").unwrap();
     reset_fixture_dir(&scratch);
     assert!(scratch.is_dir());
     assert!(!stale.exists());
-    fs::remove_dir_all(&scratch).unwrap();
+}
+
+#[test]
+fn fixtures_holds_exclusive_cross_process_lock() {
+    let _fx = fixtures();
+    let lock_path = fixture_lock_path();
+    let second = fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(&lock_path)
+        .unwrap();
+    assert!(
+        matches!(second.try_lock(), Err(fs::TryLockError::WouldBlock)),
+        "expected active fixture lock on {}",
+        lock_path.display()
+    );
 }
 
 #[test]

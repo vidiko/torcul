@@ -116,6 +116,16 @@ fn fingerprint_requires_unix_on_non_unix() {
     );
 }
 
+#[cfg(not(unix))]
+#[test]
+fn open_regular_requires_unix_on_non_unix() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("regular.bin");
+    fs::write(&path, b"torcul-non-unix").unwrap();
+    let err = open_regular(&path, Deadline::new()).unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::Unsupported);
+}
+
 #[cfg(unix)]
 fn make_fifo(path: &Path) -> std::io::Result<()> {
     use std::process::{Command, Stdio};

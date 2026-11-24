@@ -38,16 +38,21 @@ class InstallFfmpegTests(unittest.TestCase):
             root = Path(directory)
             prefix = root / "ci-ffmpeg"
 
-            def fake_urlopen(url, timeout=None):
+            def fake_open(url, timeout=None):
                 self.assertEqual(timeout, installer.NETWORK_TIMEOUT_S)
                 return io.BytesIO(b"not-the-expected-ffmpeg-tarball")
 
+            opener = mock.Mock()
+            opener.open.side_effect = fake_open
             with mock.patch.object(
-                installer.urllib.request, "urlopen", side_effect=fake_urlopen
-            ):
+                installer.urllib.request, "build_opener", return_value=opener
+            ) as mocked_build_opener:
                 rc = installer.main(
                     ["install_ffmpeg.py", str(prefix), "--sha256", "0" * 64]
                 )
+            mocked_build_opener.assert_called_once_with(
+                installer.ReleaseRedirectHandler
+            )
             self.assertNotEqual(rc, 0)
             self.assertFalse(prefix.exists())
             self.assertEqual(list(root.iterdir()), [])
@@ -110,15 +115,20 @@ class InstallFfmpegTests(unittest.TestCase):
         expected = hashlib.sha256(payload).hexdigest()
         with tempfile.TemporaryDirectory() as directory:
             archive = Path(directory) / "ffmpeg.tar.xz"
+            opener = mock.Mock()
+            opener.open.return_value = io.BytesIO(payload)
             with mock.patch.object(
                 installer.urllib.request,
-                "urlopen",
-                return_value=io.BytesIO(payload),
-            ) as mocked_urlopen:
+                "build_opener",
+                return_value=opener,
+            ) as mocked_build_opener:
                 installer.download_and_verify(
                     installer.FFMPEG_URL, archive, expected
                 )
-            mocked_urlopen.assert_called_once_with(
+            mocked_build_opener.assert_called_once_with(
+                installer.ReleaseRedirectHandler
+            )
+            opener.open.assert_called_once_with(
                 installer.FFMPEG_URL, timeout=installer.NETWORK_TIMEOUT_S
             )
             self.assertEqual(archive.read_bytes(), payload)
@@ -147,19 +157,63 @@ class InstallFfmpegTests(unittest.TestCase):
                 with self.subTest(url=url):
                     with (
                         mock.patch.object(
-                            installer.urllib.request, "urlopen"
-                        ) as mocked_urlopen,
+                            installer.urllib.request, "build_opener"
+                        ) as mocked_build_opener,
                         self.assertRaises(ValueError) as raised,
                     ):
                         installer.download_and_verify(
                             url, archive, installer.FFMPEG_SHA256
                         )
                     self.assertIn(url, str(raised.exception))
-                    mocked_urlopen.assert_not_called()
+                    mocked_build_opener.assert_not_called()
                     self.assertFalse(archive.exists())
                     with self.assertRaises(ValueError) as direct:
                         installer.require_release_url(url)
                     self.assertIn(url, str(direct.exception))
+
+    def test_release_redirect_handler_validates_redirect_targets(self):
+        """Redirect targets outside https://ffmpeg.org fail before any follow-up request."""
+        installer = load_tool("ci/install_ffmpeg.py")
+        handler = installer.ReleaseRedirectHandler()
+        req = installer.urllib.request.Request("https://ffmpeg.org/releases/x")
+        rejected = (
+            "http://ffmpeg.org/releases/x",
+            "https://evil.example/x",
+            "https://ffmpeg.org:8443/x",
+            "https://ffmpeg.org:443/x",
+            "https://user@ffmpeg.org/releases/x",
+            "https://sub.ffmpeg.org/releases/x",
+        )
+        for bad_url in rejected:
+            with (
+                self.subTest(url=bad_url),
+                self.assertRaises(ValueError) as raised,
+            ):
+                handler.redirect_request(req, None, 302, "Found", {}, bad_url)
+            self.assertIn(bad_url, str(raised.exception))
+
+        allowed = "https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz"
+        redirected = handler.redirect_request(req, None, 302, "Found", {}, allowed)
+        self.assertIsInstance(redirected, installer.urllib.request.Request)
+        self.assertEqual(redirected.full_url, allowed)
+
+        parent = mock.Mock()
+        handler.add_parent(parent)
+        req.timeout = installer.NETWORK_TIMEOUT_S
+        handler.http_error_302(
+            req,
+            io.BytesIO(),
+            302,
+            "Found",
+            {"location": "/releases/ffmpeg-9.0.2.tar.xz"},
+        )
+        self.assertEqual(parent.open.call_args.args[0].full_url, allowed)
+        parent.reset_mock()
+        with self.assertRaises(ValueError):
+            handler.http_error_302(
+                req, io.BytesIO(), 302, "Found", {"location": "//evil.example/x"}
+            )
+        parent.open.assert_not_called()
 
 
 def populate_prefix(installer, prefix, sha=None, *, write_stamp=True):

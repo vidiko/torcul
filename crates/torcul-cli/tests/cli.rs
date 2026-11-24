@@ -450,24 +450,17 @@ fn cli_symlinked_staging_dir_remux_and_verify() {
     );
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn run_with_dev_full_stdout(args: &[&OsStr]) -> (bool, String) {
-    use std::process::Stdio;
-    let dev_full = fs::File::options().write(true).open("/dev/full").unwrap();
-    let stderr_dir = tempfile::tempdir().unwrap();
-    let stderr_path = stderr_dir.path().join("stderr");
-    let stderr_file = fs::File::create(&stderr_path).unwrap();
-    let status = Command::new(env!("CARGO_BIN_EXE_torcul"))
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(dev_full))
-        .stderr(Stdio::from(stderr_file))
-        .status()
-        .unwrap();
-    (status.success(), fs::read_to_string(stderr_path).unwrap())
+    let out = execute_to(
+        Command::new(env!("CARGO_BIN_EXE_torcul")).args(args),
+        Path::new("/dev/full"),
+        Duration::from_secs(600),
+    );
+    (out.success, out.stderr)
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[test]
 fn cli_dev_full_stdout_exits_nonzero_without_panic() {
     let meta = fixtures().dir.path().join("manifest.json");
