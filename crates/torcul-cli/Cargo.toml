@@ -18,3 +18,6 @@ anyhow = "1.0.104"
 serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
+
+[dev-dependencies]
+wait-timeout.workspace = true

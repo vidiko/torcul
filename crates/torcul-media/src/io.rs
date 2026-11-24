@@ -10,22 +10,28 @@ use std::{
     time::{Duration, Instant, UNIX_EPOCH},
 };
 
+#[cfg(test)]
+mod io_tests;
+
 pub const IO_TIMEOUT: Duration = Duration::from_secs(600);
-pub const FINGERPRINT_WINDOW: u64 = 1024 * 1024;
+const HASH_CHUNK_BYTES: u64 = 1024 * 1024;
 
 /// Local regular-file operations check this deadline before and after syscalls.
 /// Kernel stalls inside a regular-file syscall cannot be interrupted portably.
 #[derive(Clone, Copy)]
 pub struct Deadline(Instant);
+
 impl Default for Deadline {
     fn default() -> Self {
         Self::new()
     }
 }
+
 impl Deadline {
     pub fn new() -> Self {
         Self(Instant::now() + IO_TIMEOUT)
     }
+
     pub fn with_timeout(timeout: Duration) -> std::io::Result<Self> {
         Instant::now()
             .checked_add(timeout)
@@ -37,13 +43,16 @@ impl Deadline {
                 )
             })
     }
+
     /// Error cleanup needs its own deadline after an operation times out.
     pub fn remove_partial(self, path: &Path) -> std::io::Result<()> {
         Self::new().run(|| std::fs::remove_file(path))
     }
+
     pub fn expired(self) -> bool {
         Instant::now() >= self.0
     }
+
     pub fn check(self) -> std::io::Result<()> {
         if self.expired() {
             Err(std::io::Error::new(
@@ -54,6 +63,7 @@ impl Deadline {
             Ok(())
         }
     }
+
     pub fn run<T>(self, operation: impl FnOnce() -> std::io::Result<T>) -> std::io::Result<T> {
         self.check()?;
         let result = operation()?;
@@ -62,7 +72,7 @@ impl Deadline {
     }
 }
 
-/// Read-only opening refuses devices, sockets and FIFOs before opening.
+/// Read-only opening refuses devices, sockets, symlinks and FIFOs before opening.
 pub fn open_regular(path: &Path, deadline: Deadline) -> std::io::Result<File> {
     let meta = deadline.run(|| std::fs::symlink_metadata(path))?;
     if !meta.file_type().is_file() {
@@ -78,19 +88,23 @@ pub(crate) struct TimedFile {
     pub file: File,
     pub deadline: Deadline,
 }
+
 impl Read for TimedFile {
     fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
         self.deadline.run(|| self.file.read(buffer))
     }
 }
+
 impl Write for TimedFile {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
         self.deadline.run(|| self.file.write(bytes))
     }
+
     fn flush(&mut self) -> std::io::Result<()> {
         self.deadline.run(|| self.file.flush())
     }
 }
+
 impl Seek for TimedFile {
     fn seek(&mut self, position: SeekFrom) -> std::io::Result<u64> {
         self.deadline.run(|| self.file.seek(position))
@@ -99,94 +113,128 @@ impl Seek for TimedFile {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Fingerprint {
+    pub dev: u64,
+    pub ino: u64,
     pub size: u64,
     pub mtime_ns: u128,
     pub sha256: String,
 }
-pub fn fingerprint(path: &Path) -> Result<Fingerprint> {
-    let deadline = Deadline::new();
-    let mut file = fs("open fingerprint source", open_regular(path, deadline))?;
-    let meta = fs("stat fingerprint source", deadline.run(|| file.metadata()))?;
-    let mtime_ns = fs("read source mtime", meta.modified())?
-        .duration_since(UNIX_EPOCH)
-        .map_err(|e| Error::Invalid(format!("mtime before epoch: {e}")))?
-        .as_nanos();
-    let mut hash = Sha256::new();
-    let size = meta.len();
-    hash_window(
-        &mut file,
-        0,
-        size.min(FINGERPRINT_WINDOW),
-        deadline,
-        &mut hash,
-    )?;
-    hash_window(
-        &mut file,
-        size.saturating_sub(FINGERPRINT_WINDOW),
-        size.min(FINGERPRINT_WINDOW),
-        deadline,
-        &mut hash,
-    )?;
-    let after = fs(
-        "restat fingerprint source",
-        deadline.run(|| file.metadata()),
-    )?;
-    if meta.len() != after.len()
-        || fs("read final mtime", after.modified())? != fs("read initial mtime", meta.modified())?
-    {
-        return Err(Error::Invalid("source changed during fingerprint".into()));
-    }
-    Ok(Fingerprint {
-        size,
-        mtime_ns,
-        sha256: hex(&hash.finalize()),
-    })
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FileStat {
+    pub dev: u64,
+    pub ino: u64,
+    pub size: u64,
+    pub mtime_ns: u128,
+    pub nlink: u64,
 }
 
-fn hash_window(
-    file: &mut File,
-    offset: u64,
-    length: u64,
-    deadline: Deadline,
-    hash: &mut Sha256,
-) -> Result<()> {
-    fs(
-        "seek fingerprint window",
-        deadline.run(|| file.seek(SeekFrom::Start(offset))),
-    )?;
-    let mut buffer = vec![0; length as usize];
-    fs(
-        "read fingerprint window",
-        deadline.run(|| file.read_exact(&mut buffer)),
-    )?;
-    hash.update(buffer);
+pub fn same_device(source_dev: u64, staging_dev: u64) -> Result<()> {
+    if source_dev != staging_dev {
+        return Err(Error::Invalid(format!(
+            "staging directory device ({staging_dev}) differs from source device ({source_dev})"
+        )));
+    }
     Ok(())
 }
 
-/// Whole-file digest binds a passing verification to exact staged bytes.
-pub fn file_sha256(path: &Path) -> Result<String> {
+pub fn path_dev(path: &Path, deadline: Deadline) -> Result<u64> {
+    let meta = fs(
+        "stat path device",
+        deadline.run(|| std::fs::symlink_metadata(path)),
+    )?;
+    metadata_dev_ino_nlink(&meta).map(|(dev, _, _)| dev)
+}
+
+pub fn fingerprint(path: &Path) -> Result<Fingerprint> {
     let deadline = Deadline::new();
-    let mut file = fs("open whole-file digest", open_regular(path, deadline))?;
-    let size = fs("stat digest input", deadline.run(|| file.metadata()))?.len();
+    let mut file = fs("open fingerprint source", open_regular(path, deadline))?;
+    let before = stat_file(&file, deadline)?;
+    if before.nlink > 1 {
+        return Err(Error::Invalid("source has multiple hard links".into()));
+    }
+    let sha256 = hash_whole_file(&mut file, before.size, deadline)?;
+    let after = stat_file(&file, deadline)?;
+    ensure_unchanged_stat(before, after)?;
+    Ok(Fingerprint {
+        dev: before.dev,
+        ino: before.ino,
+        size: before.size,
+        mtime_ns: before.mtime_ns,
+        sha256,
+    })
+}
+
+pub(crate) fn ensure_unchanged_stat(before: FileStat, after: FileStat) -> Result<()> {
+    if (before.dev, before.ino, before.size, before.mtime_ns)
+        != (after.dev, after.ino, after.size, after.mtime_ns)
+    {
+        return Err(Error::Invalid("source changed while hashing".into()));
+    }
+    Ok(())
+}
+
+fn stat_file(file: &File, deadline: Deadline) -> Result<FileStat> {
+    let meta = fs("fstat fingerprint file", deadline.run(|| file.metadata()))?;
+    let (dev, ino, nlink) = metadata_dev_ino_nlink(&meta)?;
+    let mtime_ns = fs("read file mtime", meta.modified())?
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| Error::Invalid(format!("mtime before epoch: {e}")))?
+        .as_nanos();
+    Ok(FileStat {
+        dev,
+        ino,
+        size: meta.len(),
+        mtime_ns,
+        nlink,
+    })
+}
+
+#[cfg(unix)]
+fn metadata_dev_ino_nlink(meta: &std::fs::Metadata) -> Result<(u64, u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    Ok((meta.dev(), meta.ino(), meta.nlink()))
+}
+
+#[cfg(not(unix))]
+fn metadata_dev_ino_nlink(_meta: &std::fs::Metadata) -> Result<(u64, u64, u64)> {
+    Err(Error::Invalid(
+        "POSIX device, inode and link-count fingerprinting requires Unix".into(),
+    ))
+}
+
+fn hash_whole_file(file: &mut File, size: u64, deadline: Deadline) -> Result<String> {
     let mut remaining = size;
-    let mut buffer = vec![0; FINGERPRINT_WINDOW as usize];
+    let mut buffer = vec![0_u8; size.min(HASH_CHUNK_BYTES) as usize];
     let mut hash = Sha256::new();
-    for _ in 0..=size / FINGERPRINT_WINDOW {
+    let max_reads = size.saturating_add(1).max(1);
+    for _ in 0..max_reads {
         if remaining == 0 {
             break;
         }
-        let n = remaining.min(FINGERPRINT_WINDOW) as usize;
-        fs(
-            "read whole-file digest",
-            deadline.run(|| file.read_exact(&mut buffer[..n])),
+        let target = remaining.min(buffer.len() as u64) as usize;
+        let read = fs(
+            "read fingerprint bytes",
+            deadline.run(|| file.read(&mut buffer[..target])),
         )?;
-        hash.update(&buffer[..n]);
-        remaining -= n as u64;
+        if read == 0 {
+            return Err(Error::Invalid("source changed while hashing".into()));
+        }
+        hash.update(&buffer[..read]);
+        remaining -= read as u64;
     }
     if remaining != 0 {
-        return Err(Error::Invalid("digest byte bound exceeded".into()));
+        return Err(Error::Invalid("fingerprint byte bound exceeded".into()));
     }
-    Ok(hex(&hash.finalize()))
+    let mut extra = [0_u8; 1];
+    let trailing = fs(
+        "check trailing bytes",
+        deadline.run(|| file.read(&mut extra)),
+    )?;
+    if trailing != 0 {
+        return Err(Error::Invalid("source changed while hashing".into()));
+    }
+    Ok(format!("sha256:{}", hex(&hash.finalize())))
 }
 
 pub(crate) fn hex(bytes: &[u8]) -> String {

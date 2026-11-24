@@ -1,18 +1,18 @@
 // SPDX-FileCopyrightText: 2026 Lusoris <lusoris@pm.me>
 // SPDX-License-Identifier: EUPL-1.2
-use crate::{Error, Result, io::Deadline};
-use ffmpeg_next::{self as ffmpeg, Packet, format::context::Input};
-use serde::{Deserialize, Serialize};
+use crate::{
+    Error, Result,
+    io::Deadline,
+    model::{
+        ChannelLayout, CodecParams, PacketProof, PacketRecord, SideDataKind, SideDataRecord,
+        TimeBase,
+    },
+};
+use ffmpeg_next::{self as ffmpeg, Packet, format::context::Input, packet::Ref};
 use sha2::{Digest, Sha256};
 use torcul_policy::{FileFacts, TrackKind};
 
 pub(crate) const MAX_PACKETS: u64 = 1_000_000_000;
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PacketProof {
-    pub count: u64,
-    pub bytes: u64,
-    pub sha256: String,
-}
 
 /// Read directly: FFmpeg's convenience iterator suppresses some read errors.
 pub(crate) fn read(input: &mut Input, deadline: Deadline) -> Result<Option<Packet>> {
@@ -30,9 +30,10 @@ pub(crate) fn read(input: &mut Input, deadline: Deadline) -> Result<Option<Packe
 }
 
 pub(crate) fn proofs(input: &mut Input, deadline: Deadline) -> Result<Vec<PacketProof>> {
-    let mut hashes = vec![Sha256::new(); input.nb_streams() as usize];
-    let mut counts = vec![0_u64; hashes.len()];
-    let mut sizes = vec![0_u64; hashes.len()];
+    let stream_count = input.nb_streams() as usize;
+    let mut hashes = vec![Sha256::new(); stream_count];
+    let mut counts = vec![0_u64; stream_count];
+    let mut sizes = vec![0_u64; stream_count];
     for _ in 0..MAX_PACKETS {
         let Some(packet) = read(input, deadline)? else {
             return Ok(hashes
@@ -45,17 +46,76 @@ pub(crate) fn proofs(input: &mut Input, deadline: Deadline) -> Result<Vec<Packet
                 })
                 .collect());
         };
-        let i = packet.stream();
+        let index = packet.stream();
         let hash = hashes
-            .get_mut(i)
+            .get_mut(index)
             .ok_or_else(|| Error::Invalid("packet stream out of range".into()))?;
-        counts[i] += 1;
-        sizes[i] += packet.size() as u64;
+        counts[index] += 1;
+        sizes[index] += packet.size() as u64;
         hash.update(packet.data().unwrap_or_default());
     }
     Err(Error::Invalid(format!(
         "packet bound {MAX_PACKETS} exceeded"
     )))
+}
+
+pub(crate) fn collect_packets(
+    input: &mut Input,
+    deadline: Deadline,
+) -> Result<Vec<(PacketProof, Vec<PacketRecord>)>> {
+    let stream_count = input.nb_streams() as usize;
+    let mut hashes = vec![Sha256::new(); stream_count];
+    let mut counts = vec![0_u64; stream_count];
+    let mut sizes = vec![0_u64; stream_count];
+    let mut records: Vec<Vec<PacketRecord>> = (0..stream_count).map(|_| Vec::new()).collect();
+    for _ in 0..MAX_PACKETS {
+        let Some(packet) = read(input, deadline)? else {
+            return Ok(hashes
+                .into_iter()
+                .zip(records)
+                .enumerate()
+                .map(|(i, (h, stream_records))| {
+                    (
+                        PacketProof {
+                            count: counts[i],
+                            bytes: sizes[i],
+                            sha256: crate::io::hex(&h.finalize()),
+                        },
+                        stream_records,
+                    )
+                })
+                .collect());
+        };
+        let index = packet.stream();
+        let hash = hashes
+            .get_mut(index)
+            .ok_or_else(|| Error::Invalid("packet stream out of range".into()))?;
+        counts[index] += 1;
+        sizes[index] += packet.size() as u64;
+        hash.update(packet.data().unwrap_or_default());
+        records[index].push(packet_record(&packet));
+    }
+    Err(Error::Invalid(format!(
+        "packet bound {MAX_PACKETS} exceeded"
+    )))
+}
+
+fn packet_record(packet: &Packet) -> PacketRecord {
+    let raw_duration = packet.duration();
+    let duration = (raw_duration != ffmpeg::ffi::AV_NOPTS_VALUE).then_some(raw_duration);
+    // SAFETY: packet owns a live AVPacket; side_data points to side_data_elems entries when non-null.
+    let side_data = unsafe {
+        let raw = &*packet.as_ptr();
+        raw_side_data(raw.side_data, raw.side_data_elems)
+    };
+    PacketRecord {
+        size: packet.size() as u64,
+        pts: packet.pts(),
+        dts: packet.dts(),
+        duration,
+        key: packet.is_key(),
+        side_data: side_data.into_boxed_slice(),
+    }
 }
 
 pub(crate) fn validate_presence(facts: &FileFacts, proofs: &[PacketProof]) -> Result<()> {
@@ -70,19 +130,108 @@ pub(crate) fn validate_presence(facts: &FileFacts, proofs: &[PacketProof]) -> Re
     Ok(())
 }
 
-pub(crate) fn extradata_hash(stream: &ffmpeg::Stream<'_>) -> String {
-    // SAFETY: codec parameters and extradata remain live for stream's borrow;
-    // FFmpeg guarantees extradata_size bytes at extradata when size is positive.
-    let bytes = unsafe {
-        let parameters = stream.parameters();
+pub(crate) fn codec_params(stream: &ffmpeg::Stream<'_>) -> CodecParams {
+    let parameters = stream.parameters();
+    let avg_rate = stream.avg_frame_rate();
+    // SAFETY: parameters holds a live AVCodecParameters tied to stream's borrow;
+    // extradata, coded_side_data and custom channel maps remain valid for their positive counts.
+    unsafe {
         let raw = &*parameters.as_ptr();
-        if raw.extradata.is_null() || raw.extradata_size <= 0 {
-            &[]
+        let extradata = if raw.extradata.is_null() || raw.extradata_size <= 0 {
+            Vec::new()
         } else {
-            std::slice::from_raw_parts(raw.extradata, raw.extradata_size as usize)
+            std::slice::from_raw_parts(raw.extradata, raw.extradata_size as usize).to_vec()
+        };
+        let frame_rate = if raw.framerate.num != 0 && raw.framerate.den != 0 {
+            TimeBase::normalized(raw.framerate.num, raw.framerate.den)
+        } else {
+            TimeBase::normalized(avg_rate.numerator(), avg_rate.denominator())
+        };
+        CodecParams {
+            codec_id: raw.codec_id as u32,
+            profile: raw.profile,
+            level: raw.level,
+            width: raw.width,
+            height: raw.height,
+            format: raw.format,
+            frame_rate,
+            sample_rate: raw.sample_rate,
+            channel_layout: channel_layout(&raw.ch_layout),
+            extradata,
+            coded_side_data: raw_side_data(raw.coded_side_data, raw.nb_coded_side_data),
         }
+    }
+}
+
+// SAFETY: caller passes an AVChannelLayout borrowed from a live AVCodecParameters.
+unsafe fn channel_layout(raw: &ffmpeg::ffi::AVChannelLayout) -> ChannelLayout {
+    use ffmpeg::ffi::AVChannelOrder;
+    let mask = match raw.order {
+        AVChannelOrder::AV_CHANNEL_ORDER_NATIVE | AVChannelOrder::AV_CHANNEL_ORDER_AMBISONIC => {
+            // SAFETY: union arm `mask` is active for native and ambisonic channel orders.
+            unsafe { raw.u.mask }
+        }
+        _ => 0,
     };
-    crate::io::hex(&Sha256::digest(bytes))
+    let custom_ids = if raw.order == AVChannelOrder::AV_CHANNEL_ORDER_CUSTOM
+        // SAFETY: union arm `map` is active for custom channel order; checked for non-null and positive count.
+        && unsafe { !raw.u.map.is_null() }
+        && raw.nb_channels > 0
+    {
+        // SAFETY: FFmpeg allocates `nb_channels` entries at `u.map` for custom channel layouts.
+        unsafe { std::slice::from_raw_parts(raw.u.map, raw.nb_channels as usize) }
+            .iter()
+            .map(|entry| entry.id as i32)
+            .collect()
+    } else {
+        Vec::new()
+    };
+    ChannelLayout {
+        order: raw.order as i32,
+        nb_channels: raw.nb_channels,
+        mask,
+        custom_ids,
+    }
+}
+
+// SAFETY: caller guarantees `ptr` is either null or points to `count` initialized AVPacketSideData items.
+unsafe fn raw_side_data(
+    ptr: *const ffmpeg::ffi::AVPacketSideData,
+    count: std::ffi::c_int,
+) -> Vec<SideDataRecord> {
+    if ptr.is_null() || count <= 0 {
+        return Vec::new();
+    }
+    // SAFETY: non-null `ptr` and positive `count` reference a contiguous FFmpeg side-data array.
+    let entries = unsafe { std::slice::from_raw_parts(ptr, count as usize) };
+    let mut out = Vec::new();
+    for entry in entries {
+        let Some(kind) = relevant_side_data_kind(entry.type_) else {
+            continue;
+        };
+        let bytes: Box<[u8]> = if entry.data.is_null() || entry.size == 0 {
+            Box::default()
+        } else {
+            // SAFETY: non-null `entry.data` holds `entry.size` initialized bytes owned by FFmpeg.
+            unsafe { std::slice::from_raw_parts(entry.data, entry.size) }.into()
+        };
+        out.push(SideDataRecord { kind, data: bytes });
+    }
+    out.sort();
+    out
+}
+
+fn relevant_side_data_kind(raw: ffmpeg::ffi::AVPacketSideDataType) -> Option<SideDataKind> {
+    use ffmpeg::ffi::AVPacketSideDataType as Kind;
+    match raw {
+        Kind::AV_PKT_DATA_DISPLAYMATRIX => Some(SideDataKind::DisplayMatrix),
+        Kind::AV_PKT_DATA_MASTERING_DISPLAY_METADATA => {
+            Some(SideDataKind::MasteringDisplayMetadata)
+        }
+        Kind::AV_PKT_DATA_CONTENT_LIGHT_LEVEL => Some(SideDataKind::ContentLightLevel),
+        Kind::AV_PKT_DATA_DOVI_CONF => Some(SideDataKind::DoviConf),
+        _ => None,
+    }
 }
 
 pub(crate) fn picture_attachment(

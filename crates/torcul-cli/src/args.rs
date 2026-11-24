@@ -7,7 +7,7 @@ use std::path::PathBuf;
 #[command(
     name = "torcul",
     version,
-    about = "Plan and verify lossless media track selection"
+    about = "Plan, stage and verify lossless media track selection"
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -36,16 +36,6 @@ pub enum Command {
     },
     /// Compare staged tracks, metadata, chapters and packet payloads to source.
     Verify {
-        #[arg(long)]
-        staging: PathBuf,
-        #[arg(required = true)]
-        files: Vec<PathBuf>,
-    },
-    /// Atomically replace sources after verification. NO BACKUP is created.
-    #[command(
-        long_about = "Replace each source atomically only after a passing verification and unchanged source/staging fingerprints. Copies into a temporary file beside the source, fsyncs, then renames over it. NO BACKUP is created; replacement is irreversible."
-    )]
-    Apply {
         #[arg(long)]
         staging: PathBuf,
         #[arg(required = true)]

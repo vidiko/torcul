@@ -1,0 +1,304 @@
+// SPDX-FileCopyrightText: 2026 Lusoris <lusoris@pm.me>
+// SPDX-License-Identifier: EUPL-1.2
+#[path = "../../torcul-media/tests/support/mod.rs"]
+mod support;
+
+use std::{
+    ffi::OsStr,
+    fs,
+    io::Write,
+    path::{Path, PathBuf},
+    process::Command,
+    time::Duration,
+};
+use support::*;
+use tempfile::TempDir;
+use torcul_media::io::{Fingerprint, fingerprint};
+
+fn cli(args: &[&OsStr]) -> Output {
+    execute(
+        Command::new(env!("CARGO_BIN_EXE_torcul")).args(args),
+        Duration::from_secs(600),
+    )
+}
+
+fn command(name: &str, meta: Option<&Path>, staging: Option<&Path>, file: &Path) -> Output {
+    let mut args = vec![OsStr::new(name)];
+    if let Some(meta) = meta {
+        args.extend([OsStr::new("--meta"), meta.as_os_str()]);
+    }
+    if let Some(staging) = staging {
+        args.extend([OsStr::new("--staging"), staging.as_os_str()]);
+    }
+    args.push(file.as_os_str());
+    cli(&args)
+}
+
+fn prepared(name: &str) -> (TempDir, PathBuf, PathBuf) {
+    let (temp, copy) = copy_fixture(name);
+    let staging = temp.path().join("staging");
+    let meta = fixtures().dir.path().join("manifest.json");
+    let out = command("remux", Some(&meta), Some(&staging), &copy);
+    assert!(out.success, "{}", out.stderr);
+    (temp, copy, staging)
+}
+
+#[test]
+fn cli_apply_subcommand_removed() {
+    let (_tmp, src, staging) = prepared("f07_default_dropped.mkv");
+    let before = fs::read(&src).unwrap();
+    let verify_out = command("verify", None, Some(&staging), &src);
+    assert!(verify_out.success, "{}", verify_out.stderr);
+
+    let out = command("apply", None, Some(&staging), &src);
+    assert!(!out.success);
+    assert!(
+        out.stderr.contains("unrecognized subcommand 'apply'"),
+        "{}",
+        out.stderr
+    );
+    assert_eq!(fs::read(&src).unwrap(), before);
+
+    let help = cli(&[OsStr::new("--help")]);
+    assert!(help.success);
+    assert!(!help.stdout.contains("\n  apply"), "{}", help.stdout);
+}
+
+#[test]
+fn cli_dry_run_report_matches_oracle_and_marks_pending_lid() {
+    let fx = fixtures();
+    let tmp = tempfile::tempdir().unwrap();
+    let json = tmp.path().join("plan.json");
+    let meta = fx.dir.path().join("manifest.json");
+    let out = cli(&[
+        OsStr::new("plan"),
+        OsStr::new("--meta"),
+        meta.as_os_str(),
+        OsStr::new("--json"),
+        json.as_os_str(),
+        fx.dir.path().as_os_str(),
+    ]);
+    assert!(out.success, "{}", out.stderr);
+    println!("{}", out.stdout);
+    assert!(
+        out.stdout.contains(
+            "f01_movie_en_de_extra.mkv | 0,1,2,5,6,7,8,9,12 | drop (pending LID): 3,4,10,11 | yes |"
+        ),
+        "{}",
+        out.stdout
+    );
+    let rows: Vec<serde_json::Value> = serde_json::from_slice(&fs::read(json).unwrap()).unwrap();
+    assert_eq!(rows.len(), 11);
+    for (report, oracle) in rows.iter().zip(&fx.manifest.fixtures) {
+        let p: torcul_policy::Plan = serde_json::from_value(report["plan"].clone()).unwrap();
+        assert_eq!(p.kept_indices(), oracle.expect);
+        assert_eq!(p.warnings, oracle.warnings);
+        assert_eq!(p.needs_remux, oracle.needs_remux);
+        let decisions = report["plan"]["decisions"].as_array().unwrap();
+        for decision in decisions {
+            let index = decision["index"].as_u64().unwrap() as usize;
+            if oracle.expect.contains(&index) {
+                assert!(
+                    decision.get("lid").is_none(),
+                    "{} kept stream {index} must omit lid: {decision}",
+                    oracle.name
+                );
+            } else {
+                assert_eq!(
+                    decision.get("lid").and_then(|v| v.as_str()),
+                    Some("pending"),
+                    "{} dropped stream {index} must mark lid pending: {decision}",
+                    oracle.name
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn cli_missing_metadata_and_empty_directory() {
+    let tmp = tempfile::tempdir().unwrap();
+    let meta = tmp.path().join("meta.json");
+    fs::write(&meta, br#"{"fixtures":[]}"#).unwrap();
+    let empty = tempfile::tempdir().unwrap();
+    let out = command("plan", Some(&meta), None, empty.path());
+    assert!(out.success, "{}", out.stderr);
+    let file = fixtures().dir.path().join("f01_movie_en_de_extra.mkv");
+    let out = command("plan", Some(&meta), None, &file);
+    assert!(!out.success);
+    assert!(out.stdout.contains("no metadata entry"), "{}", out.stdout);
+}
+
+#[test]
+fn cli_invalid_original_language_fails_planning() {
+    for bad in ["xx", "english"] {
+        let tmp = tempfile::tempdir().unwrap();
+        let meta = tmp.path().join("meta.json");
+        fs::write(
+            &meta,
+            format!(
+                r#"{{"fixtures":[{{"name":"f01_movie_en_de_extra.mkv","original":"{bad}","anime":false}}]}}"#
+            ),
+        )
+        .unwrap();
+        let file = fixtures().dir.path().join("f01_movie_en_de_extra.mkv");
+        let out = command("plan", Some(&meta), None, &file);
+        assert!(!out.success, "expected failure for {bad}");
+        assert!(
+            out.stdout.contains("invalid ISO 639 original language"),
+            "{}",
+            out.stdout
+        );
+    }
+}
+
+#[test]
+fn cli_clean_files_write_nothing() {
+    for name in ["f06_already_clean.mkv", "f11_no_audio_matches_original.mkv"] {
+        let (temp, src) = copy_fixture(name);
+        let staging = temp.path().join("staging");
+        let out = command(
+            "remux",
+            Some(&fixtures().dir.path().join("manifest.json")),
+            Some(&staging),
+            &src,
+        );
+        assert!(out.success, "{}", out.stderr);
+        assert!(!staging.exists());
+    }
+}
+
+#[test]
+fn cli_remux_sidecar_preserves_pending_lid_and_staging_fingerprint() {
+    let (_tmp, src, staging) = prepared("f01_movie_en_de_extra.mkv");
+    let staged = staging.join("f01_movie_en_de_extra.mkv");
+    let sidecar = staging.join("f01_movie_en_de_extra.mkv.torcul.json");
+
+    let initial: serde_json::Value = serde_json::from_slice(&fs::read(&sidecar).unwrap()).unwrap();
+    assert_eq!(initial["plan"]["decisions"][3]["lid"], "pending");
+    assert!(initial["plan"]["decisions"][0].get("lid").is_none());
+    assert!(initial["verified_staging"].is_null());
+
+    let out = command("verify", None, Some(&staging), &src);
+    assert!(out.success, "{}", out.stderr);
+
+    let after_verify: serde_json::Value =
+        serde_json::from_slice(&fs::read(&sidecar).unwrap()).unwrap();
+    assert!(after_verify.get("verified_staging_sha256").is_none());
+    let recorded: Fingerprint =
+        serde_json::from_value(after_verify["verified_staging"].clone()).unwrap();
+    assert_eq!(recorded, fingerprint(&staged).unwrap());
+
+    // Re-verifying an unchanged staged file still matches and passes.
+    let again = command("verify", None, Some(&staging), &src);
+    assert!(again.success, "{}", again.stderr);
+
+    // Touching staged file mtime after verify causes mismatch and fails verify.
+    let bumped = fs::metadata(&staged).unwrap().modified().unwrap() + Duration::from_secs(5);
+    fs::File::open(&staged)
+        .unwrap()
+        .set_modified(bumped)
+        .unwrap();
+    assert_ne!(recorded, fingerprint(&staged).unwrap());
+    let failed = command("verify", None, Some(&staging), &src);
+    assert!(!failed.success);
+    let after_touch: serde_json::Value =
+        serde_json::from_slice(&fs::read(&sidecar).unwrap()).unwrap();
+    assert_eq!(after_touch["verification"]["pass"], false);
+    assert!(after_touch["verified_staging"].is_null());
+}
+
+#[test]
+fn cli_verify_changed_source_records_failure() {
+    let (_tmp, src, staging) = prepared("f07_default_dropped.mkv");
+    let out = command("verify", None, Some(&staging), &src);
+    assert!(out.success, "{}", out.stderr);
+    fs::OpenOptions::new()
+        .append(true)
+        .open(&src)
+        .unwrap()
+        .write_all(b"x")
+        .unwrap();
+    let out = command("verify", None, Some(&staging), &src);
+    assert!(!out.success);
+    let record: serde_json::Value = serde_json::from_slice(
+        &fs::read(staging.join("f07_default_dropped.mkv.torcul.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(record["verification"]["pass"], false);
+}
+
+#[test]
+fn cli_verify_tampered_staging_records_failure() {
+    let (_tmp, src, staging) = prepared("f08_mp4_en_fr.mp4");
+    let staged = staging.join("f08_mp4_en_fr.mp4");
+    let mut bytes = fs::read(&staged).unwrap();
+    bytes[64] ^= 0x01;
+    fs::write(&staged, bytes).unwrap();
+    let out = command("verify", None, Some(&staging), &src);
+    assert!(!out.success);
+    let record: serde_json::Value =
+        serde_json::from_slice(&fs::read(staging.join("f08_mp4_en_fr.mp4.torcul.json")).unwrap())
+            .unwrap();
+    assert_eq!(record["verification"]["pass"], false);
+    assert!(record["verified_staging"].is_null());
+}
+
+#[test]
+fn cli_fragmented_subtitles_match_media_verdict() {
+    let temp = tempfile::tempdir().unwrap();
+    let src = temp.path().join("fragmented.mp4");
+    let out = execute(
+        Command::new("ffmpeg")
+            .args(["-nostdin", "-y", "-loglevel", "error", "-i"])
+            .arg(fixtures().dir.path().join("f08_mp4_en_fr.mp4"))
+            .args([
+                "-map",
+                "0",
+                "-c",
+                "copy",
+                "-movflags",
+                "frag_keyframe+empty_moov+default_base_moof",
+            ])
+            .arg(&src),
+        Duration::from_secs(60),
+    );
+    assert!(out.success, "{}", out.stderr);
+    let meta = temp.path().join("meta.json");
+    fs::write(
+        &meta,
+        br#"{"fixtures":[{"name":"fragmented.mp4","original":"en","anime":false}]}"#,
+    )
+    .unwrap();
+    let staging = temp.path().join("staging");
+    let remux_out = command("remux", Some(&meta), Some(&staging), &src);
+    assert!(remux_out.success, "{}", remux_out.stderr);
+    let p = torcul_policy::plan(
+        &torcul_media::probe(&src).unwrap(),
+        &torcul_policy::TitleMeta {
+            original: Some("en".into()),
+            anime: false,
+        },
+    )
+    .unwrap();
+    let report = torcul_media::verify(&src, &p, &staging.join("fragmented.mp4")).unwrap();
+    let verify_out = command("verify", None, Some(&staging), &src);
+    assert_eq!(verify_out.success, report.pass);
+}
+
+#[test]
+fn cli_refuses_hard_linked_source() {
+    let (temp, src) = copy_fixture("f07_default_dropped.mkv");
+    let link = temp.path().join("hardlink.mkv");
+    fs::hard_link(&src, &link).unwrap();
+    let staging = temp.path().join("staging");
+    let out = command(
+        "remux",
+        Some(&fixtures().dir.path().join("manifest.json")),
+        Some(&staging),
+        &src,
+    );
+    assert!(!out.success);
+    assert!(out.stderr.contains("hard links"), "{}", out.stderr);
+    assert!(!staging.exists());
+}

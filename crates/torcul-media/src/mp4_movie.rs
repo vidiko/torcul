@@ -34,6 +34,7 @@ pub(crate) fn movie(
     boxes::metadata(&source_children, &mut output_children);
     boxes::pack(output.kind, &output_children)
 }
+
 fn track_id(raw: &Raw) -> Result<u32> {
     let children = boxes::children(&raw.body)?;
     let tkhd = children
@@ -42,42 +43,64 @@ fn track_id(raw: &Raw) -> Result<u32> {
         .ok_or_else(|| Error::Invalid("MP4 track missing tkhd".into()))?;
     Ok(Tkhd::decode_body(&mut tkhd.body.as_slice())?.track_id)
 }
+
+fn find_child<'a>(children: &'a [Raw], kind: &[u8; 4]) -> Option<&'a Raw> {
+    children.iter().find(|b| b.kind == FourCC::new(kind))
+}
+
 fn track(raw: &Raw, source: Option<&Raw>, delta: i64) -> Result<Raw> {
     let mut children = boxes::children(&raw.body)?;
+    let src_children = source.map(|s| boxes::children(&s.body)).transpose()?;
+    let src_mdia = src_children.as_deref().and_then(|c| find_child(c, b"mdia"));
     for child in children
         .iter_mut()
         .filter(|b| b.kind == FourCC::new(b"mdia"))
     {
-        *child = media(child, delta)?;
+        *child = media(child, src_mdia, delta)?;
     }
-    if let Some(source) = source {
-        boxes::metadata(&boxes::children(&source.body)?, &mut children);
+    if let Some(src_children) = &src_children {
+        boxes::metadata(src_children, &mut children);
     }
     boxes::pack(raw.kind, &children)
 }
-fn media(raw: &Raw, delta: i64) -> Result<Raw> {
+
+fn media(raw: &Raw, source: Option<&Raw>, delta: i64) -> Result<Raw> {
     let mut children = boxes::children(&raw.body)?;
+    let src_children = source.map(|s| boxes::children(&s.body)).transpose()?;
+    let src_minf = src_children.as_deref().and_then(|c| find_child(c, b"minf"));
     for child in children
         .iter_mut()
         .filter(|b| b.kind == FourCC::new(b"minf"))
     {
-        *child = information(child, delta)?;
+        *child = information(child, src_minf, delta)?;
     }
     boxes::pack(raw.kind, &children)
 }
-fn information(raw: &Raw, delta: i64) -> Result<Raw> {
+
+fn information(raw: &Raw, source: Option<&Raw>, delta: i64) -> Result<Raw> {
     let mut children = boxes::children(&raw.body)?;
+    let src_children = source.map(|s| boxes::children(&s.body)).transpose()?;
+    let src_stbl = src_children.as_deref().and_then(|c| find_child(c, b"stbl"));
     for child in children
         .iter_mut()
         .filter(|b| b.kind == FourCC::new(b"stbl"))
     {
-        *child = samples(child, delta)?;
+        *child = samples(child, src_stbl, delta)?;
     }
     boxes::pack(raw.kind, &children)
 }
-fn samples(raw: &Raw, delta: i64) -> Result<Raw> {
+
+fn samples(raw: &Raw, source: Option<&Raw>, delta: i64) -> Result<Raw> {
     let mut children = boxes::children(&raw.body)?;
+    let src_children = source.map(|s| boxes::children(&s.body)).transpose()?;
+    let src_stsd = src_children.as_deref().and_then(|c| find_child(c, b"stsd"));
     for child in &mut children {
+        if child.kind == FourCC::new(b"stsd") {
+            if let Some(original_stsd) = src_stsd {
+                *child = original_stsd.clone();
+            }
+            continue;
+        }
         let entries = if child.kind == FourCC::new(b"stco") {
             Stco::decode_body(&mut child.body.as_slice())?
                 .entries

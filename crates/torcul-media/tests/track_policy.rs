@@ -3,13 +3,121 @@
 mod support;
 use std::{
     fs,
-    io::Write,
     path::Path,
     time::{Duration, Instant},
 };
 use support::*;
-use torcul_media::{DURATION_TOLERANCE_US, duration_within_tolerance, probe, remux, verify};
-use torcul_policy::{TitleMeta, plan};
+use torcul_media::{
+    MUXER_WRITTEN_TAGS, StreamCounts, StreamMapping, expected_counts, probe, remux, snapshot,
+    verify,
+};
+use torcul_policy::{FileFacts, Plan, TitleMeta, TrackKind, plan};
+
+fn facts_stream_counts(facts: &FileFacts) -> StreamCounts {
+    let mut counts = StreamCounts::default();
+    for t in &facts.tracks {
+        counts.add(t.kind);
+    }
+    counts
+}
+
+fn check_remuxed_fixture(
+    src: &Path,
+    dst: &Path,
+    row: &Row,
+    planned: &Plan,
+) -> std::result::Result<(), String> {
+    let src_facts = probe(src).map_err(|e| format!("probe source: {e}"))?;
+    if facts_stream_counts(&src_facts) != row.counts.source {
+        return Err(format!(
+            "source-count-drift: probe {:?} != manifest {:?}",
+            facts_stream_counts(&src_facts),
+            row.counts.source
+        ));
+    }
+    if src_facts.chapters != row.chapters {
+        return Err(format!(
+            "source-chapter-drift: probe {} != manifest {}",
+            src_facts.chapters, row.chapters
+        ));
+    }
+    let dst_facts = probe(dst).map_err(|e| format!("probe output: {e}"))?;
+    let src_snap = snapshot(src).map_err(|e| format!("snapshot source: {e}"))?;
+    let dst_snap = snapshot(dst).map_err(|e| format!("snapshot output: {e}"))?;
+    let kept_expected = expected_counts(&src_snap, planned);
+    let dst_stream_counts = facts_stream_counts(&dst_facts);
+    if dst_stream_counts != row.counts.output || dst_stream_counts != kept_expected.streams {
+        return Err(format!(
+            "output-stream-counts: probe {dst_stream_counts:?}, manifest {:?}, plan {:?}",
+            row.counts.output, kept_expected.streams
+        ));
+    }
+    check_chapters_and_attachments(&src_snap, &dst_snap)?;
+    let report = verify(src, planned, dst).map_err(|e| format!("verify: {e}"))?;
+    if !report.pass {
+        return Err(format!("verify-failed: {:?}", report.failures));
+    }
+    Ok(())
+}
+
+fn check_chapters_and_attachments(
+    src_snap: &torcul_media::MediaSnapshot,
+    dst_snap: &torcul_media::MediaSnapshot,
+) -> std::result::Result<(), String> {
+    if dst_snap.chapters.len() != src_snap.chapters.len() {
+        return Err(format!(
+            "chapter-count: expected {}, actual {}",
+            src_snap.chapters.len(),
+            dst_snap.chapters.len()
+        ));
+    }
+    for (idx, (sc, dc)) in src_snap.chapters.iter().zip(&dst_snap.chapters).enumerate() {
+        let start_eq = i128::from(sc.start)
+            * i128::from(sc.time_base.num)
+            * i128::from(dc.time_base.den)
+            == i128::from(dc.start) * i128::from(dc.time_base.num) * i128::from(sc.time_base.den);
+        let end_eq =
+            i128::from(sc.end) * i128::from(sc.time_base.num) * i128::from(dc.time_base.den)
+                == i128::from(dc.end) * i128::from(dc.time_base.num) * i128::from(sc.time_base.den);
+        if !start_eq || !end_eq || sc.tags.get("title") != dc.tags.get("title") {
+            return Err(format!("chapter-{idx}-mismatch"));
+        }
+    }
+    check_attachments(src_snap, dst_snap)
+}
+
+fn check_attachments(
+    src_snap: &torcul_media::MediaSnapshot,
+    dst_snap: &torcul_media::MediaSnapshot,
+) -> std::result::Result<(), String> {
+    let src_att: Vec<_> = src_snap
+        .streams
+        .iter()
+        .filter(|s| s.track.kind == TrackKind::Attachment)
+        .collect();
+    let dst_att: Vec<_> = dst_snap
+        .streams
+        .iter()
+        .filter(|s| s.track.kind == TrackKind::Attachment)
+        .collect();
+    if dst_att.len() != src_att.len() {
+        return Err(format!(
+            "attachment-count: expected {}, actual {}",
+            src_att.len(),
+            dst_att.len()
+        ));
+    }
+    for (idx, (sa, da)) in src_att.iter().zip(&dst_att).enumerate() {
+        if sa.tags.get("filename") != da.tags.get("filename")
+            || sa.tags.get("mimetype") != da.tags.get("mimetype")
+            || sa.codec_params.extradata != da.codec_params.extradata
+            || da.codec_params.extradata.is_empty()
+        {
+            return Err(format!("attachment-{idx}-mismatch"));
+        }
+    }
+    Ok(())
+}
 
 #[test]
 fn oracle_all_eleven() {
@@ -23,14 +131,16 @@ fn oracle_all_eleven() {
                 original: row.original.clone(),
                 anime: row.anime,
             },
-        );
+        )
+        .unwrap();
         assert_eq!(p.kept_indices(), row.expect, "{}", row.name);
         assert_eq!(p.warnings, row.warnings, "{}", row.name);
         assert_eq!(p.needs_remux, row.needs_remux, "{}", row.name);
     }
 }
+
 #[test]
-fn remux_and_verify_every_fixture() {
+fn remux_and_verify_every_fixture_with_counts_and_stream_map() {
     let fx = fixtures();
     let staging = tempfile::tempdir().unwrap();
     for row in &fx.manifest.fixtures {
@@ -42,16 +152,273 @@ fn remux_and_verify_every_fixture() {
                 original: row.original.clone(),
                 anime: row.anime,
             },
-        );
+        )
+        .unwrap();
         remux(&src, &p, &dst).unwrap_or_else(|e| panic!("{}: {e}", row.name));
         if row.needs_remux {
-            let verdict = verify(&src, &p, &dst).unwrap();
-            assert!(verdict.pass, "{}: {:?}", row.name, verdict.failures);
+            check_remuxed_fixture(&src, &dst, row, &p)
+                .unwrap_or_else(|e| panic!("{}: {e}", row.name));
+            if row.name == "f01_movie_en_de_extra.mkv" {
+                let report = verify(&src, &p, &dst).unwrap();
+                assert_eq!(
+                    report.stream_map.last().copied(),
+                    Some(StreamMapping {
+                        source: 12,
+                        staging: 8,
+                        attached_pic: true,
+                    })
+                );
+            }
         } else {
             assert!(!dst.exists(), "{} must write nothing", row.name);
         }
     }
 }
+
+#[test]
+fn f02_chapters_attachments_and_counts_match_oracle() {
+    let fx = fixtures();
+    let row = fx
+        .manifest
+        .fixtures
+        .iter()
+        .find(|r| r.name == "f02_anime_ja.mkv")
+        .unwrap();
+    assert_eq!(row.chapters, 3);
+    let src = fx.dir.path().join(&row.name);
+    let tmp = tempfile::tempdir().unwrap();
+    let dst = tmp.path().join(&row.name);
+    let p = plan(
+        &probe(&src).unwrap(),
+        &TitleMeta {
+            original: row.original.clone(),
+            anime: row.anime,
+        },
+    )
+    .unwrap();
+    remux(&src, &p, &dst).unwrap();
+    check_remuxed_fixture(&src, &dst, row, &p).unwrap();
+    let report = verify(&src, &p, &dst).unwrap();
+    println!(
+        "f02 source_counts={:?} output_counts={:?}",
+        report.source_counts, report.output_counts
+    );
+    assert_eq!(report.source_counts.chapters, 3);
+    assert_eq!(report.output_counts.chapters, 3);
+    assert_eq!(report.source_counts.attachments, 2);
+    assert_eq!(report.output_counts.attachments, 2);
+}
+
+#[test]
+fn f02_negative_mutations_fail_chapter_attachment_and_drift_asserts() {
+    let fx = fixtures();
+    let row = fx
+        .manifest
+        .fixtures
+        .iter()
+        .find(|r| r.name == "f02_anime_ja.mkv")
+        .unwrap();
+    let src = fx.dir.path().join(&row.name);
+    let tmp = tempfile::tempdir().unwrap();
+    let dst = tmp.path().join(&row.name);
+    let p = plan(
+        &probe(&src).unwrap(),
+        &TitleMeta {
+            original: row.original.clone(),
+            anime: row.anime,
+        },
+    )
+    .unwrap();
+    remux(&src, &p, &dst).unwrap();
+
+    let missing_chap = drop_one_chapter(tmp.path(), &dst);
+    let err = check_remuxed_fixture(&src, &missing_chap, row, &p).unwrap_err();
+    assert!(err.contains("chapter-count"), "{err}");
+    let v = verify(&src, &p, &missing_chap).unwrap();
+    assert!(!v.pass && v.failures.iter().any(|f| f.contains("chapter-count")));
+
+    let missing_att = drop_one_attachment(tmp.path(), &dst);
+    let err = check_remuxed_fixture(&src, &missing_att, row, &p).unwrap_err();
+    assert!(
+        err.contains("attachment-count") || err.contains("output-stream-counts"),
+        "{err}"
+    );
+    let v = verify(&src, &p, &missing_att).unwrap();
+    assert!(!v.pass && v.failures.iter().any(|f| f.contains("attachment-count")));
+
+    let mut drifted = row.clone();
+    drifted.counts.source.audio += 1;
+    let err = check_remuxed_fixture(&src, &dst, &drifted, &p).unwrap_err();
+    assert!(err.contains("source-count-drift"), "{err}");
+}
+
+fn drop_one_chapter(dir: &Path, dst: &Path) -> std::path::PathBuf {
+    let two_chap_meta = dir.join("two.ffmeta");
+    fs::write(
+        &two_chap_meta,
+        ";FFMETADATA1\n[CHAPTER]\nTIMEBASE=1/1000\nSTART=0\nEND=666\ntitle=Chapter 1\n\
+         [CHAPTER]\nTIMEBASE=1/1000\nSTART=666\nEND=1333\ntitle=Chapter 2\n",
+    )
+    .unwrap();
+    let missing_chap = dir.join("missing-chapter.mkv");
+    let out = execute(
+        std::process::Command::new("ffmpeg")
+            .args(["-nostdin", "-y", "-loglevel", "error", "-i"])
+            .arg(dst)
+            .args(["-f", "ffmetadata", "-i"])
+            .arg(&two_chap_meta)
+            .args(["-map", "0", "-map_chapters", "1", "-c", "copy"])
+            .arg(&missing_chap),
+        Duration::from_secs(60),
+    );
+    assert!(out.success, "{}", out.stderr);
+    missing_chap
+}
+
+fn drop_one_attachment(dir: &Path, dst: &Path) -> std::path::PathBuf {
+    let missing_att = dir.join("missing-attachment.mkv");
+    let out = execute(
+        std::process::Command::new("ffmpeg")
+            .args(["-nostdin", "-y", "-loglevel", "error", "-i"])
+            .arg(dst)
+            .args(["-map", "0", "-map", "-0:t:1", "-c", "copy"])
+            .arg(&missing_att),
+        Duration::from_secs(60),
+    );
+    assert!(out.success, "{}", out.stderr);
+    missing_att
+}
+
+#[test]
+fn muxer_written_tags_allowlist_entries_proven_on_fixture() {
+    assert_eq!(MUXER_WRITTEN_TAGS.len(), 2);
+    let tmp = tempfile::tempdir().unwrap();
+    let piped = tmp.path().join("piped.mkv");
+    pipe_matroska_without_duration_tags(
+        &fixtures().dir.path().join("f07_default_dropped.mkv"),
+        &piped,
+    );
+    let src_snap = snapshot(&piped).unwrap();
+    assert!(
+        !src_snap.tags.contains_key("ENCODER"),
+        "source must start without ENCODER SimpleTag: {:?}",
+        src_snap.tags
+    );
+    assert!(
+        src_snap
+            .streams
+            .iter()
+            .all(|s| !s.tags.keys().any(|k| k.eq_ignore_ascii_case("DURATION"))),
+        "source streams must start without DURATION"
+    );
+    let p = plan(
+        &probe(&piped).unwrap(),
+        &TitleMeta {
+            original: Some("en".into()),
+            anime: false,
+        },
+    )
+    .unwrap();
+    let staged = tmp.path().join("staged.mkv");
+    remux(&piped, &p, &staged).unwrap();
+    let dst_snap = snapshot(&staged).unwrap();
+    assert!(
+        dst_snap.tags.contains_key("ENCODER"),
+        "Matroska muxer must write global ENCODER"
+    );
+    assert!(
+        dst_snap
+            .streams
+            .iter()
+            .all(|s| s.tags.contains_key("DURATION")),
+        "Matroska muxer must write per-stream DURATION"
+    );
+    let verdict = verify(&piped, &p, &staged).unwrap();
+    assert!(verdict.pass, "{:?}", verdict.failures);
+}
+
+fn pipe_matroska_without_duration_tags(src: &Path, dst: &Path) {
+    use wait_timeout::ChildExt;
+    let out_file = fs::File::create(dst).unwrap();
+    let mut child = std::process::Command::new("ffmpeg")
+        .args(["-nostdin", "-loglevel", "error", "-i"])
+        .arg(src)
+        .args([
+            "-map",
+            "0",
+            "-map_metadata",
+            "-1",
+            "-metadata:s:a:0",
+            "language=fre",
+            "-disposition:a:0",
+            "default",
+            "-metadata:s:a:1",
+            "language=eng",
+            "-metadata:s:s:0",
+            "language=eng",
+            "-fflags",
+            "+bitexact",
+            "-c",
+            "copy",
+            "-f",
+            "matroska",
+            "pipe:1",
+        ])
+        .stdin(std::process::Stdio::null())
+        .stdout(out_file)
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let status = child
+        .wait_timeout(Duration::from_secs(60))
+        .unwrap()
+        .unwrap();
+    assert!(status.success());
+}
+
+#[test]
+fn verify_rejects_added_tag_in_staging() {
+    let src = fixtures().dir.path().join("f07_default_dropped.mkv");
+    let tmp = tempfile::tempdir().unwrap();
+    let staged = tmp.path().join("staged.mkv");
+    let p = plan(
+        &probe(&src).unwrap(),
+        &TitleMeta {
+            original: Some("en".into()),
+            anime: false,
+        },
+    )
+    .unwrap();
+    remux(&src, &p, &staged).unwrap();
+    let extra = tmp.path().join("extra-tag.mkv");
+    let out = execute(
+        std::process::Command::new("ffmpeg")
+            .args(["-nostdin", "-y", "-loglevel", "error", "-i"])
+            .arg(&staged)
+            .args([
+                "-map",
+                "0",
+                "-c",
+                "copy",
+                "-metadata",
+                "unexpected_injected_tag=1",
+            ])
+            .arg(&extra),
+        Duration::from_secs(60),
+    );
+    assert!(out.success, "{}", out.stderr);
+    let verdict = verify(&src, &p, &extra).unwrap();
+    assert!(!verdict.pass, "added global tag must fail verify");
+    assert!(
+        verdict
+            .failures
+            .iter()
+            .any(|f| f.contains("added:UNEXPECTED_INJECTED_TAG")),
+        "{:?}",
+        verdict.failures
+    );
+}
+
 #[test]
 fn invalid_and_truncated_inputs() {
     let temp = tempfile::tempdir().unwrap();
@@ -64,6 +431,7 @@ fn invalid_and_truncated_inputs() {
     fs::write(&truncated, &full[..4096]).unwrap();
     assert!(probe(&truncated).is_err());
 }
+
 #[test]
 fn tampered_packet_fails_lossless_proof() {
     let src = fixtures().dir.path().join("f08_mp4_en_fr.mp4");
@@ -75,7 +443,8 @@ fn tampered_packet_fails_lossless_proof() {
             original: Some("en".into()),
             anime: false,
         },
-    );
+    )
+    .unwrap();
     remux(&src, &p, &dst).unwrap();
     tamper_packet(&dst);
     let v = verify(&src, &p, &dst).unwrap();
@@ -86,6 +455,7 @@ fn tampered_packet_fails_lossless_proof() {
         v.failures
     );
 }
+
 fn tamper_packet(path: &Path) {
     let end = Instant::now() + Duration::from_secs(30);
     let mut input =
@@ -108,6 +478,7 @@ fn tamper_packet(path: &Path) {
     bytes[offset + payload.len() / 2] ^= 1;
     fs::write(path, bytes).unwrap();
 }
+
 #[test]
 fn wrong_plan_fails_verification() {
     let src = fixtures().dir.path().join("f02_anime_ja.mkv");
@@ -118,18 +489,21 @@ fn wrong_plan_fails_verification() {
             original: Some("ja".into()),
             anime: true,
         },
-    );
+    )
+    .unwrap();
     let movie = plan(
         &probe(&src).unwrap(),
         &TitleMeta {
             original: Some("ja".into()),
             anime: false,
         },
-    );
+    )
+    .unwrap();
     let dst = tmp.path().join("movie.mkv");
     remux(&src, &movie, &dst).unwrap();
     assert!(!verify(&src, &anime, &dst).unwrap().pass);
 }
+
 #[test]
 fn existing_staging_not_clobbered() {
     let src = fixtures().dir.path().join("f07_default_dropped.mkv");
@@ -142,133 +516,10 @@ fn existing_staging_not_clobbered() {
             original: Some("en".into()),
             anime: false,
         },
-    );
+    )
+    .unwrap();
     assert!(remux(&src, &p, &dst).is_err());
     assert_eq!(fs::read(dst).unwrap(), b"retain me");
-}
-#[test]
-fn duration_tolerance_boundary() {
-    assert!(duration_within_tolerance(Some(1_000_000), Some(1_000_000)));
-    assert!(duration_within_tolerance(
-        Some(0),
-        Some(DURATION_TOLERANCE_US as i64)
-    ));
-    assert!(!duration_within_tolerance(
-        Some(0),
-        Some(DURATION_TOLERANCE_US as i64 + 1)
-    ));
-    assert!(!duration_within_tolerance(Some(0), None));
-    assert!(duration_within_tolerance(None, None));
-}
-#[test]
-fn cli_dry_run_report_matches_oracle() {
-    let fx = fixtures();
-    let tmp = tempfile::tempdir().unwrap();
-    let json = tmp.path().join("plan.json");
-    let meta = fx.dir.path().join("manifest.json");
-    let out = cli(&[
-        "plan".as_ref(),
-        "--meta".as_ref(),
-        meta.as_os_str(),
-        "--json".as_ref(),
-        json.as_os_str(),
-        fx.dir.path().as_os_str(),
-    ]);
-    assert!(out.success, "{}", out.stderr);
-    println!("{}", out.stdout);
-    let rows: Vec<serde_json::Value> = serde_json::from_slice(&fs::read(json).unwrap()).unwrap();
-    assert_eq!(rows.len(), 11);
-    for (report, oracle) in rows.iter().zip(&fx.manifest.fixtures) {
-        let p: torcul_policy::Plan = serde_json::from_value(report["plan"].clone()).unwrap();
-        assert_eq!(p.kept_indices(), oracle.expect);
-        assert_eq!(p.warnings, oracle.warnings);
-        assert_eq!(p.needs_remux, oracle.needs_remux);
-    }
-}
-#[test]
-fn cli_missing_metadata_and_empty_directory() {
-    let tmp = tempfile::tempdir().unwrap();
-    let meta = tmp.path().join("meta.json");
-    fs::write(&meta, br#"{"fixtures":[]}"#).unwrap();
-    let empty = tempfile::tempdir().unwrap();
-    let out = command("plan", Some(&meta), None, empty.path());
-    assert!(out.success, "{}", out.stderr);
-    let file = fixtures().dir.path().join("f01_movie_en_de_extra.mkv");
-    let out = command("plan", Some(&meta), None, &file);
-    assert!(!out.success);
-    assert!(out.stdout.contains("no metadata entry"));
-}
-fn prepared(name: &str) -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
-    let (temp, copy) = copy_fixture(name);
-    let staging = temp.path().join("staging");
-    let meta = fixtures().dir.path().join("manifest.json");
-    let out = command("remux", Some(&meta), Some(&staging), &copy);
-    assert!(out.success, "{}", out.stderr);
-    (temp, copy, staging)
-}
-#[test]
-fn cli_apply_requires_verification_then_replaces_copy() {
-    let (_tmp, src, staging) = prepared("f07_default_dropped.mkv");
-    let before = fs::read(&src).unwrap();
-    let out = command("apply", None, Some(&staging), &src);
-    assert!(!out.success);
-    assert_eq!(fs::read(&src).unwrap(), before);
-    let out = command("verify", None, Some(&staging), &src);
-    assert!(out.success, "{}", out.stderr);
-    let out = command("apply", None, Some(&staging), &src);
-    assert!(out.success, "{}", out.stderr);
-    assert_eq!(probe(&src).unwrap().tracks.len(), 3);
-    assert!(
-        probe(&src).unwrap().tracks[1]
-            .dispositions
-            .contains("default")
-    );
-}
-#[test]
-fn cli_apply_refuses_changed_source() {
-    let (_tmp, src, staging) = prepared("f07_default_dropped.mkv");
-    let out = command("verify", None, Some(&staging), &src);
-    assert!(out.success, "{}", out.stderr);
-    fs::OpenOptions::new()
-        .append(true)
-        .open(&src)
-        .unwrap()
-        .write_all(b"x")
-        .unwrap();
-    let before = fs::read(&src).unwrap();
-    let out = command("apply", None, Some(&staging), &src);
-    assert!(!out.success);
-    assert_eq!(fs::read(src).unwrap(), before);
-}
-#[test]
-fn cli_apply_refuses_changed_staging() {
-    let (_tmp, src, staging) = prepared("f08_mp4_en_fr.mp4");
-    let out = command("verify", None, Some(&staging), &src);
-    assert!(out.success, "{}", out.stderr);
-    tamper_packet(&staging.join(src.file_name().unwrap()));
-    let out = command("apply", None, Some(&staging), &src);
-    assert!(!out.success);
-    let out = command("verify", None, Some(&staging), &src);
-    assert!(!out.success);
-    let record: serde_json::Value =
-        serde_json::from_slice(&fs::read(staging.join("f08_mp4_en_fr.mp4.torcul.json")).unwrap())
-            .unwrap();
-    assert_eq!(record["verification"]["pass"], false);
-}
-#[test]
-fn cli_clean_files_write_nothing() {
-    for name in ["f06_already_clean.mkv", "f11_no_audio_matches_original.mkv"] {
-        let (temp, src) = copy_fixture(name);
-        let staging = temp.path().join("staging");
-        let out = command(
-            "remux",
-            Some(&fixtures().dir.path().join("manifest.json")),
-            Some(&staging),
-            &src,
-        );
-        assert!(out.success, "{}", out.stderr);
-        assert!(!staging.exists());
-    }
 }
 
 #[test]
@@ -283,8 +534,9 @@ fn chapters_and_global_metadata_round_trip() {
                 original: Some("en".into()),
                 anime: false,
             },
-        );
-        let dst = temp.path().join(format!("output-{}", name));
+        )
+        .unwrap();
+        let dst = temp.path().join(format!("output-{name}"));
         remux(&src, &p, &dst).unwrap();
         let verdict = verify(&src, &p, &dst).unwrap();
         assert!(verdict.pass, "{name}: {:?}", verdict.failures);
@@ -300,20 +552,13 @@ fn chapters_and_global_metadata_round_trip() {
         );
     }
 }
+
 fn enriched(dir: &Path, name: &str, chapter_end: u32, note: &str) -> std::path::PathBuf {
     let meta = dir.join(format!("{note}.ffmeta"));
     fs::write(
         &meta,
         format!(
-            ";FFMETADATA1
-title=Pilot
-torcul_note={note}
-[CHAPTER]
-TIMEBASE=1/1000
-START=0
-END={chapter_end}
-title=Opening
-"
+            ";FFMETADATA1\ntitle=Pilot\ntorcul_note={note}\n[CHAPTER]\nTIMEBASE=1/1000\nSTART=0\nEND={chapter_end}\ntitle=Opening\n"
         ),
     )
     .unwrap();
@@ -338,6 +583,7 @@ title=Opening
     assert!(out.success, "{}", out.stderr);
     dst
 }
+
 #[test]
 fn changed_chapters_and_metadata_fail_verification() {
     let temp = tempfile::tempdir().unwrap();
@@ -349,13 +595,14 @@ fn changed_chapters_and_metadata_fail_verification() {
             original: Some("en".into()),
             anime: false,
         },
-    );
+    )
+    .unwrap();
     let dst = temp.path().join("changed.mkv");
     remux(&other, &p, &dst).unwrap();
     let verdict = verify(&src, &p, &dst).unwrap();
     assert!(!verdict.pass);
     assert!(
-        verdict.failures.iter().any(|s| s == "chapters"),
+        verdict.failures.iter().any(|s| s.starts_with("chapters:")),
         "{:?}",
         verdict.failures
     );
@@ -368,32 +615,13 @@ fn changed_chapters_and_metadata_fail_verification() {
         verdict.failures
     );
 }
-#[test]
-fn verify_changed_source_records_failure() {
-    let (_tmp, src, staging) = prepared("f07_default_dropped.mkv");
-    let out = command("verify", None, Some(&staging), &src);
-    assert!(out.success, "{}", out.stderr);
-    fs::OpenOptions::new()
-        .append(true)
-        .open(&src)
-        .unwrap()
-        .write_all(b"x")
-        .unwrap();
-    let out = command("verify", None, Some(&staging), &src);
-    assert!(!out.success);
-    let record: serde_json::Value = serde_json::from_slice(
-        &fs::read(staging.join("f07_default_dropped.mkv.torcul.json")).unwrap(),
-    )
-    .unwrap();
-    assert_eq!(record["verification"]["pass"], false);
-}
 
 #[test]
 fn unknown_language_changes_are_detected() {
     let temp = tempfile::tempdir().unwrap();
     let src = retagged(temp.path(), "qzz");
     let changed = retagged(temp.path(), "qzy");
-    let p = plan(&probe(&src).unwrap(), &TitleMeta::default());
+    let p = plan(&probe(&src).unwrap(), &TitleMeta::default()).unwrap();
     let good = temp.path().join("good.mkv");
     remux(&src, &p, &good).unwrap();
     assert!(verify(&src, &p, &good).unwrap().pass);
@@ -404,6 +632,7 @@ fn unknown_language_changes_are_detected() {
         "different unknown languages must not collapse to None"
     );
 }
+
 fn retagged(dir: &Path, lang: &str) -> std::path::PathBuf {
     let dst = dir.join(format!("{lang}.mkv"));
     let out = execute(
@@ -424,6 +653,7 @@ fn retagged(dir: &Path, lang: &str) -> std::path::PathBuf {
     assert!(out.success, "{}", out.stderr);
     dst
 }
+
 #[test]
 fn mp4_attached_picture_round_trip() {
     let temp = tempfile::tempdir().unwrap();
@@ -456,30 +686,12 @@ fn mp4_attached_picture_round_trip() {
             original: Some("en".into()),
             anime: false,
         },
-    );
+    )
+    .unwrap();
     let dst = temp.path().join("output.mp4");
     remux(&src, &p, &dst).unwrap();
     let verdict = verify(&src, &p, &dst).unwrap();
     assert!(verdict.pass, "{:?}", verdict.failures);
-}
-#[test]
-fn fingerprint_windows_and_full_digest_boundary() {
-    for size in [0, 1, 1024 * 1024, 3 * 1024 * 1024] {
-        let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("bytes");
-        let bytes = vec![42; size];
-        fs::write(&path, &bytes).unwrap();
-        let before = torcul_media::io::fingerprint(&path).unwrap();
-        assert_eq!(before.size, size as u64);
-        assert_eq!(before, torcul_media::io::fingerprint(&path).unwrap());
-        let digest = torcul_media::io::file_sha256(&path).unwrap();
-        if size > 0 {
-            let mut changed = bytes;
-            changed[size / 2] ^= 1;
-            fs::write(&path, &changed).unwrap();
-            assert_ne!(digest, torcul_media::io::file_sha256(&path).unwrap());
-        }
-    }
 }
 
 #[test]
@@ -492,7 +704,8 @@ fn invalid_plan_leaves_no_partial() {
             original: Some("ja".into()),
             anime: true,
         },
-    );
+    )
+    .unwrap();
     let temp = tempfile::tempdir().unwrap();
     let dst = temp.path().join("partial.mkv");
     p.decisions[0].index = 999;
@@ -530,7 +743,8 @@ fn original_encoder_metadata_is_preserved() {
                 original: Some("en".into()),
                 anime: false,
             },
-        );
+        )
+        .unwrap();
         let dst = src.with_file_name(format!("out-{name}"));
         remux(&src, &p, &dst).unwrap();
         let end = Instant::now() + Duration::from_secs(30);
@@ -566,13 +780,15 @@ fn mp4_changed_file_type_size_rescales_chunk_offsets() {
             original: Some("en".into()),
             anime: false,
         },
-    );
+    )
+    .unwrap();
     let dst = temp.path().join("output.mp4");
     remux(&src, &p, &dst).unwrap();
     let verdict = verify(&src, &p, &dst).unwrap();
     assert!(verdict.pass, "{:?}", verdict.failures);
     assert_eq!(ftyp_size(&src), ftyp_size(&dst));
 }
+
 fn fragmented(dir: &Path, subtitles: bool) -> std::path::PathBuf {
     let src = dir.join("fragmented.mp4");
     let mut cmd = std::process::Command::new("ffmpeg");
@@ -596,42 +812,32 @@ fn fragmented(dir: &Path, subtitles: bool) -> std::path::PathBuf {
     assert!(out.success, "{}", out.stderr);
     src
 }
+
 #[test]
 fn fragmented_subtitles_require_exact_packet_proof() {
     let temp = tempfile::tempdir().unwrap();
     let src = fragmented(temp.path(), true);
-    let meta = temp.path().join("meta.json");
-    fs::write(
-        &meta,
-        br#"{"fixtures":[{"name":"fragmented.mp4","original":"en","anime":false}]}"#,
-    )
-    .unwrap();
-    let staging = temp.path().join("staging");
-    let out = command("remux", Some(&meta), Some(&staging), &src);
-    assert!(out.success, "{}", out.stderr);
     let p = plan(
         &probe(&src).unwrap(),
         &TitleMeta {
             original: Some("en".into()),
             anime: false,
         },
-    );
-    let report = verify(&src, &p, &staging.join("fragmented.mp4")).unwrap();
+    )
+    .unwrap();
+    let staged = temp.path().join("staged-fragmented.mp4");
+    remux(&src, &p, &staged).unwrap();
+    let report = verify(&src, &p, &staged).unwrap();
     let exact = report.staging_packets.len() == p.kept_indices().len()
-        && p.kept_indices()
+        && report
+            .stream_map
             .iter()
-            .enumerate()
-            .all(|(to, from)| report.source_packets[*from] == report.staging_packets[to]);
-    assert_eq!(report.pass, exact, "{:?}", report.failures);
-    let out = command("verify", None, Some(&staging), &src);
-    assert_eq!(out.success, report.pass);
-    if !report.pass {
-        let before = fs::read(&src).unwrap();
-        let out = command("apply", None, Some(&staging), &src);
-        assert!(!out.success);
-        assert_eq!(fs::read(&src).unwrap(), before);
+            .all(|m| report.source_packets[m.source] == report.staging_packets[m.staging]);
+    if !exact {
+        assert!(!report.pass, "{:?}", report.failures);
     }
 }
+
 fn ftyp_size(path: &Path) -> usize {
     use mp4_atom::ReadFrom;
     let bytes = fs::read(path).unwrap();

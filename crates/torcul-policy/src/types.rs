@@ -3,6 +3,14 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum Error {
+    #[error("invalid ISO 639 original language: {0:?}")]
+    InvalidOriginalLanguage(String),
+}
+
+pub type Result<T> = std::result::Result<T, Error>;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TrackKind {
     Video,
@@ -29,9 +37,11 @@ pub struct TrackInfo {
 pub struct FileFacts {
     pub tracks: Vec<TrackInfo>,
     pub container: String,
+    #[serde(default)]
+    pub chapters: usize,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TitleMeta {
     pub original: Option<String>,
     pub anime: bool,
@@ -42,6 +52,8 @@ pub struct TrackDecision {
     pub index: usize,
     pub keep: bool,
     pub reason: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lid: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -57,6 +69,14 @@ impl Plan {
         self.decisions
             .iter()
             .filter(|d| d.keep)
+            .map(|d| d.index)
+            .collect()
+    }
+
+    pub fn dropped_indices(&self) -> Vec<usize> {
+        self.decisions
+            .iter()
+            .filter(|d| !d.keep)
             .map(|d| d.index)
             .collect()
     }

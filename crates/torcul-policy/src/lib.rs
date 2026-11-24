@@ -10,18 +10,24 @@ pub use types::*;
 mod tests;
 
 /// Pure policy: decisions preserve input order; warnings are unique and sorted.
-pub fn plan(facts: &FileFacts, meta: &TitleMeta) -> Plan {
+pub fn plan(facts: &FileFacts, meta: &TitleMeta) -> Result<Plan> {
+    let original = match meta.original.as_deref() {
+        Some(raw) => Some(
+            normalize_language(raw)
+                .ok_or_else(|| Error::InvalidOriginalLanguage(raw.to_owned()))?,
+        ),
+        None => None,
+    };
     let mut warnings = BTreeSet::new();
     let audio: Vec<_> = facts
         .tracks
         .iter()
         .filter(|t| t.kind == TrackKind::Audio)
         .collect();
-    let original = meta.original.as_deref().and_then(normalize_language);
     let preferred = audio
         .iter()
         .any(|t| preferred_language(t.language.as_deref()));
-    let fallback = audio_fallback(&audio, &original, preferred, meta, &mut warnings);
+    let fallback = audio_fallback(&audio, original.as_deref(), preferred, meta, &mut warnings);
     let decisions: Vec<_> = facts
         .tracks
         .iter()
@@ -36,6 +42,7 @@ pub fn plan(facts: &FileFacts, meta: &TitleMeta) -> Plan {
                 index: t.index,
                 keep,
                 reason: reason.to_owned(),
+                lid: (!keep).then(|| "pending".to_owned()),
             }
         })
         .collect();
@@ -43,32 +50,39 @@ pub fn plan(facts: &FileFacts, meta: &TitleMeta) -> Plan {
     if default_audio_change.is_some() {
         warnings.insert("default-audio-moved".to_owned());
     }
-    Plan {
+    Ok(Plan {
         needs_remux: decisions.iter().any(|d| !d.keep) || default_audio_change.is_some(),
         decisions,
         warnings: warnings.into_iter().collect(),
         default_audio_change,
-    }
+    })
 }
 
 fn audio_fallback(
     audio: &[&TrackInfo],
-    original: &Option<String>,
+    original: Option<&str>,
     preferred: bool,
     meta: &TitleMeta,
     warnings: &mut BTreeSet<String>,
 ) -> bool {
-    if audio.is_empty() || preferred {
+    if audio.is_empty() {
         return false;
     }
-    if meta.original.is_none() {
+    if original.is_none() && (meta.anime || !preferred) {
         warnings.insert("original-language-unknown".to_owned());
         return true;
     }
+    if preferred {
+        return false;
+    }
     let any_match = audio.iter().any(|t| {
         undetermined(t.language.as_deref())
-            || original.as_ref().is_some_and(|o| {
-                t.language.as_deref().and_then(normalize_language).as_ref() == Some(o)
+            || original.is_some_and(|o| {
+                t.language
+                    .as_deref()
+                    .and_then(normalize_language)
+                    .as_deref()
+                    == Some(o)
             })
     });
     if !any_match {

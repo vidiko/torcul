@@ -8,4 +8,5 @@ license.workspace = true
 
 [dependencies]
 serde.workspace = true
-isolang = { version = "2.4.0", default-features = false }
+thiserror.workspace = true
+rust_iso639 = "=0.1.0"

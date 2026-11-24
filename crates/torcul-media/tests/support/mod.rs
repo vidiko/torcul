@@ -1,5 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Lusoris <lusoris@pm.me>
 // SPDX-License-Identifier: EUPL-1.2
+#![allow(dead_code)]
+
 use serde::Deserialize;
 use std::{
     fs,
@@ -9,13 +11,21 @@ use std::{
     time::Duration,
 };
 use tempfile::TempDir;
+use torcul_media::StreamCounts;
 use wait_timeout::ChildExt;
 
-#[derive(Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Manifest {
     pub fixtures: Vec<Row>,
 }
-#[derive(Deserialize)]
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct FixtureCounts {
+    pub source: StreamCounts,
+    pub output: StreamCounts,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct Row {
     pub name: String,
     pub original: Option<String>,
@@ -23,11 +33,15 @@ pub struct Row {
     pub expect: Vec<usize>,
     pub warnings: Vec<String>,
     pub needs_remux: bool,
+    pub chapters: usize,
+    pub counts: FixtureCounts,
 }
+
 pub struct Fixtures {
     pub dir: TempDir,
     pub manifest: Manifest,
 }
+
 pub fn fixtures() -> &'static Fixtures {
     static FIXTURES: OnceLock<Fixtures> = OnceLock::new();
     FIXTURES.get_or_init(|| {
@@ -51,11 +65,13 @@ pub fn fixtures() -> &'static Fixtures {
         Fixtures { dir, manifest }
     })
 }
+
 pub struct Output {
     pub success: bool,
     pub stdout: String,
     pub stderr: String,
 }
+
 pub fn execute(command: &mut Command, timeout: Duration) -> Output {
     let logs = tempfile::tempdir().unwrap();
     let stdout_path = logs.path().join("stdout");
@@ -80,34 +96,7 @@ pub fn execute(command: &mut Command, timeout: Duration) -> Output {
         stderr: fs::read_to_string(stderr_path).unwrap(),
     }
 }
-fn binary() -> PathBuf {
-    let executable = std::env::current_exe().unwrap();
-    let debug = executable
-        .ancestors()
-        .find(|p| p.file_name().is_some_and(|n| n == "debug"))
-        .unwrap();
-    let path = debug.join(format!("torcul{}", std::env::consts::EXE_SUFFIX));
-    assert!(
-        path.is_file(),
-        "cargo build required before CLI integration tests: {}",
-        path.display()
-    );
-    path
-}
-pub fn cli(args: &[&std::ffi::OsStr]) -> Output {
-    execute(Command::new(binary()).args(args), Duration::from_secs(600))
-}
-pub fn command(name: &str, meta: Option<&Path>, staging: Option<&Path>, file: &Path) -> Output {
-    let mut args = vec![std::ffi::OsStr::new(name)];
-    if let Some(meta) = meta {
-        args.extend([std::ffi::OsStr::new("--meta"), meta.as_os_str()]);
-    }
-    if let Some(staging) = staging {
-        args.extend([std::ffi::OsStr::new("--staging"), staging.as_os_str()]);
-    }
-    args.push(file.as_os_str());
-    cli(&args)
-}
+
 pub fn copy_fixture(name: &str) -> (TempDir, PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     let copy = dir.path().join(name);

@@ -4,32 +4,74 @@ use crate::{
     Error, Result,
     error::{av, fs},
     io::{Deadline, open_regular},
+    model::{ChapterRecord, MediaSnapshot, StreamSnapshot, Tags, TimeBase},
     packets,
 };
 use ffmpeg_next::{self as ffmpeg, format, media};
-use std::{collections::BTreeMap, path::Path};
+use std::path::Path;
 use torcul_policy::{FileFacts, TrackInfo, TrackKind};
-
-pub(crate) type Tags = BTreeMap<String, String>;
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Chapter {
-    pub start_ns: i128,
-    pub end_ns: i128,
-    pub tags: Tags,
-}
-pub(crate) struct Snapshot {
-    pub facts: FileFacts,
-    pub packets: Vec<packets::PacketProof>,
-    pub duration_us: Option<i64>,
-    pub chapters: Vec<Chapter>,
-    pub tags: Tags,
-    pub stream_tags: Vec<Tags>,
-    pub extra: Vec<String>,
-}
 
 /// Probe a local file; reject malformed/truncated packet streams.
 pub fn probe(path: &Path) -> Result<FileFacts> {
-    Ok(snapshot(path)?.facts)
+    let deadline = Deadline::new();
+    let mut input = open(path, deadline)?;
+    let facts = facts(&input)?;
+    let proofs = packets::proofs(&mut input, deadline)?;
+    packets::validate_presence(&facts, &proofs)?;
+    Ok(facts)
+}
+
+/// Read complete stream, chapter, metadata, codec-parameter and packet snapshots.
+pub fn snapshot(path: &Path) -> Result<MediaSnapshot> {
+    let deadline = Deadline::new();
+    let mut input = open(path, deadline)?;
+    let facts = facts(&input)?;
+    let chapters = input
+        .chapters()
+        .map(|c| ChapterRecord {
+            id: c.id(),
+            time_base: rational_base(c.time_base()),
+            start: c.start(),
+            end: c.end(),
+            tags: tags(c.metadata()),
+        })
+        .collect();
+    let stream_meta: Vec<_> = input
+        .streams()
+        .map(|s| {
+            (
+                rational_base(s.time_base()),
+                packets::codec_params(&s),
+                tags(s.metadata()),
+            )
+        })
+        .collect();
+    let container_tags = tags(input.metadata());
+    let collected = packets::collect_packets(&mut input, deadline)?;
+    let proofs: Vec<_> = collected.iter().map(|(proof, _)| proof.clone()).collect();
+    packets::validate_presence(&facts, &proofs)?;
+    let streams = facts
+        .tracks
+        .into_iter()
+        .zip(stream_meta)
+        .zip(collected)
+        .map(
+            |((track, (time_base, codec_params, stream_tags)), (proof, records))| StreamSnapshot {
+                track,
+                time_base,
+                codec_params,
+                tags: stream_tags,
+                proof,
+                packets: records,
+            },
+        )
+        .collect();
+    Ok(MediaSnapshot {
+        container: facts.container,
+        streams,
+        chapters,
+        tags: container_tags,
+    })
 }
 
 pub(crate) fn open(path: &Path, deadline: Deadline) -> Result<format::context::Input> {
@@ -54,6 +96,7 @@ pub(crate) fn facts(input: &format::context::Input) -> Result<FileFacts> {
     Ok(FileFacts {
         tracks,
         container: input.format().name().to_owned(),
+        chapters: input.nb_chapters() as usize,
     })
 }
 
@@ -97,42 +140,10 @@ fn dispositions(stream: &ffmpeg::Stream<'_>) -> std::collections::BTreeSet<Strin
         .collect()
 }
 
-pub(crate) fn snapshot(path: &Path) -> Result<Snapshot> {
-    let deadline = Deadline::new();
-    let mut input = open(path, deadline)?;
-    let facts = facts(&input)?;
-    let duration_us = (input.duration() != ffmpeg::ffi::AV_NOPTS_VALUE).then_some(input.duration());
-    let chapters = input
-        .chapters()
-        .map(|c| Chapter {
-            start_ns: nanos(c.start(), c.time_base()),
-            end_ns: nanos(c.end(), c.time_base()),
-            tags: tags(c.metadata()),
-        })
-        .collect();
-    let stream_tags = input.streams().map(|s| tags(s.metadata())).collect();
-    let extra = input
-        .streams()
-        .map(|s| packets::extradata_hash(&s))
-        .collect();
-    let tags = tags(input.metadata());
-    let packets = packets::proofs(&mut input, deadline)?;
-    packets::validate_presence(&facts, &packets)?;
-    Ok(Snapshot {
-        facts,
-        packets,
-        duration_us,
-        chapters,
-        tags,
-        stream_tags,
-        extra,
-    })
+fn rational_base(base: ffmpeg::Rational) -> TimeBase {
+    TimeBase::normalized(base.numerator(), base.denominator())
 }
 
-fn nanos(value: i64, base: ffmpeg::Rational) -> i128 {
-    i128::from(value) * i128::from(base.numerator()) * 1_000_000_000
-        / i128::from(base.denominator())
-}
 pub(crate) fn tags(dictionary: ffmpeg::DictionaryRef<'_>) -> Tags {
     dictionary
         .iter()

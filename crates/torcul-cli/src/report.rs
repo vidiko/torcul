@@ -13,13 +13,16 @@ use torcul_policy::{Plan, TitleMeta};
 struct Manifest {
     fixtures: Vec<MetaRow>,
 }
+
 #[derive(Deserialize)]
 struct MetaRow {
     name: String,
     #[serde(flatten)]
     meta: TitleMeta,
 }
+
 pub type Metadata = BTreeMap<String, TitleMeta>;
+
 pub fn metadata(path: &Path) -> Result<Metadata> {
     let manifest: Manifest = files::read_json(path)?;
     let mut map = Metadata::new();
@@ -30,6 +33,7 @@ pub fn metadata(path: &Path) -> Result<Metadata> {
     }
     Ok(map)
 }
+
 pub fn title<'a>(path: &Path, meta: &'a Metadata) -> Result<&'a TitleMeta> {
     let name = path
         .file_name()
@@ -38,18 +42,20 @@ pub fn title<'a>(path: &Path, meta: &'a Metadata) -> Result<&'a TitleMeta> {
     meta.get(name)
         .with_context(|| format!("no metadata entry for {name}"))
 }
+
 #[derive(Serialize)]
 pub struct FileReport {
     pub path: PathBuf,
     pub plan: Option<Plan>,
     pub error: Option<String>,
 }
+
 pub fn plans(paths: &[PathBuf], meta: &Metadata) -> Vec<FileReport> {
     paths
         .iter()
         .map(|path| {
             let result = title(path, meta)
-                .and_then(|m| Ok(torcul_policy::plan(&torcul_media::probe(path)?, m)));
+                .and_then(|m| Ok(torcul_policy::plan(&torcul_media::probe(path)?, m)?));
             match result {
                 Ok(plan) => FileReport {
                     path: path.clone(),
@@ -65,28 +71,40 @@ pub fn plans(paths: &[PathBuf], meta: &Metadata) -> Vec<FileReport> {
         })
         .collect()
 }
+
 pub fn table(reports: &[FileReport]) {
-    println!("FILE | KEEP (input indices) | REMUX | WARNINGS");
+    println!("FILE | KEEP (input indices) | DROP | REMUX | WARNINGS");
     for row in reports {
         let name = row.path.file_name().unwrap_or_default().to_string_lossy();
         if let Some(plan) = &row.plan {
+            let dropped = plan.dropped_indices();
+            let drop_col = if dropped.is_empty() {
+                "-".to_owned()
+            } else {
+                format!("drop (pending LID): {}", join_indices(&dropped))
+            };
             println!(
-                "{} | {} | {} | {}",
+                "{} | {} | {} | {} | {}",
                 name,
-                plan.kept_indices()
-                    .iter()
-                    .map(usize::to_string)
-                    .collect::<Vec<_>>()
-                    .join(","),
+                join_indices(&plan.kept_indices()),
+                drop_col,
                 if plan.needs_remux { "yes" } else { "no" },
                 plan.warnings.join(",")
             );
         } else {
             println!(
-                "{} | ERROR | - | {}",
+                "{} | ERROR | - | - | {}",
                 name,
                 row.error.as_deref().unwrap_or("unknown error")
             );
         }
     }
+}
+
+fn join_indices(indices: &[usize]) -> String {
+    indices
+        .iter()
+        .map(usize::to_string)
+        .collect::<Vec<_>>()
+        .join(",")
 }

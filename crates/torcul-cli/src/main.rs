@@ -1,6 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Lusoris <lusoris@pm.me>
 // SPDX-License-Identifier: EUPL-1.2
-mod apply;
 mod args;
 mod files;
 mod report;
@@ -14,6 +13,7 @@ fn main() {
         std::process::exit(1);
     }
 }
+
 fn run(cli: args::Cli) -> Result<()> {
     match cli.command {
         args::Command::Plan {
@@ -43,11 +43,9 @@ fn run(cli: args::Cli) -> Result<()> {
         args::Command::Verify { staging, files } => {
             batch(&files, |file| staging::verify(file, &staging))
         }
-        args::Command::Apply { staging, files } => {
-            batch(&files, |file| apply::apply(file, &staging))
-        }
     }
 }
+
 fn batch(
     paths: &[std::path::PathBuf],
     operation: impl Fn(&std::path::Path) -> Result<()>,
