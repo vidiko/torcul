@@ -9,7 +9,11 @@ use std::{
 };
 use torcul_media::io::{Deadline, open_regular};
 
+#[cfg(test)]
+mod files_tests;
+
 const MAX_JSON_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_DIR_ENTRIES: usize = 1_000_000;
 pub fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T> {
     let deadline = Deadline::new();
     let file = open_regular(path, deadline).with_context(|| format!("open {}", path.display()))?;
@@ -36,6 +40,48 @@ pub fn write_json(path: &Path, data: &impl Serialize) -> Result<()> {
     deadline.check()?;
     Ok(())
 }
+pub fn check_json_destination(dest: &Path, meta: &Path, inputs: &[PathBuf]) -> Result<()> {
+    let deadline = Deadline::new();
+    let resolved = resolve_destination(dest, deadline)?;
+    if resolved == canonical(meta)? {
+        bail!(
+            "JSON output destination {} resolves to metadata file {}",
+            dest.display(),
+            meta.display()
+        );
+    }
+    for input in inputs {
+        if resolved == canonical(input)? {
+            bail!(
+                "JSON output destination {} resolves to input file {}",
+                dest.display(),
+                input.display()
+            );
+        }
+    }
+    Ok(())
+}
+fn resolve_destination(dest: &Path, deadline: Deadline) -> Result<PathBuf> {
+    if deadline
+        .run(|| dest.try_exists())
+        .with_context(|| format!("check JSON destination {}", dest.display()))?
+    {
+        return deadline
+            .run(|| dest.canonicalize())
+            .with_context(|| format!("canonicalize JSON destination {}", dest.display()));
+    }
+    let name = dest
+        .file_name()
+        .with_context(|| format!("invalid JSON destination {}", dest.display()))?;
+    let parent = dest
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let canonical_parent = deadline
+        .run(|| parent.canonicalize())
+        .with_context(|| format!("resolve parent of JSON destination {}", dest.display()))?;
+    Ok(canonical_parent.join(name))
+}
 pub fn expand(paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
     let deadline = Deadline::new();
     let mut files = Vec::new();
@@ -45,15 +91,7 @@ pub fn expand(paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
             .with_context(|| format!("stat {}", path.display()))?;
         if meta.is_dir() {
             let entries = deadline.run(|| fs::read_dir(path))?;
-            for (index, entry) in entries.take(1_000_001).enumerate() {
-                let entry = deadline.run(|| entry)?;
-                if index >= 1_000_000 {
-                    bail!("directory file bound exceeded");
-                }
-                if deadline.run(|| entry.file_type())?.is_file() && media_extension(&entry.path()) {
-                    files.push(entry.path());
-                }
-            }
+            collect_dir_entries(entries, deadline, &mut files)?;
         } else {
             files.push(path.clone());
         }
@@ -61,6 +99,25 @@ pub fn expand(paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
     files.sort();
     files.dedup();
     Ok(files)
+}
+
+fn collect_dir_entries(
+    mut entries: fs::ReadDir,
+    deadline: Deadline,
+    files: &mut Vec<PathBuf>,
+) -> Result<()> {
+    for index in 0..=MAX_DIR_ENTRIES {
+        let Some(entry) = deadline.run(|| entries.next().transpose())? else {
+            break;
+        };
+        if index >= MAX_DIR_ENTRIES {
+            bail!("directory file bound exceeded");
+        }
+        if deadline.run(|| entry.file_type())?.is_file() && media_extension(&entry.path()) {
+            files.push(entry.path());
+        }
+    }
+    Ok(())
 }
 fn media_extension(path: &Path) -> bool {
     path.extension().and_then(|s| s.to_str()).is_some_and(|s| {

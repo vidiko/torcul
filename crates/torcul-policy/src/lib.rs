@@ -145,5 +145,8 @@ fn preferred_language(lang: Option<&str>) -> bool {
 }
 
 fn undetermined(lang: Option<&str>) -> bool {
-    lang.is_none_or(|s| s.trim().is_empty() || s.eq_ignore_ascii_case("und"))
+    lang.is_none_or(|s| {
+        let s = s.trim();
+        s.is_empty() || s.eq_ignore_ascii_case("und")
+    })
 }

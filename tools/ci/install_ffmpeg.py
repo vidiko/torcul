@@ -11,6 +11,7 @@ import subprocess  # nosec B404 # invoked with resolved argument vectors and no 
 import sys
 import tarfile
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -22,6 +23,7 @@ FFMPEG_SHA256 = "8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002
 STAMP_NAME = ".torcul-ffmpeg-sha256"
 
 NETWORK_TIMEOUT_S = 60
+EXTRACT_TIMEOUT_S = 300
 BUILD_TIMEOUT_S = 600
 VERSION_TIMEOUT_S = 30
 CHUNK_BYTES = 65536
@@ -58,15 +60,23 @@ CONFIGURE_FLAGS = (
 )
 
 
+def require_posix():
+    """Require a POSIX host because FFmpeg is built with configure and make."""
+    if os.name != "posix":
+        raise RuntimeError(
+            f"POSIX platform required for configure/make FFmpeg build (got {os.name})"
+        )
+
+
 def parse_args(argv):
     """Parse `<prefix> [--sha256 <64-hex>]` command arguments."""
     if len(argv) == 2:
-        return pathlib.Path(argv[1]).resolve(), FFMPEG_SHA256
+        return pathlib.Path(argv[1]).absolute(), FFMPEG_SHA256
     if len(argv) == 4 and argv[2] == "--sha256":
         digest = argv[3].strip().lower()
         if not re.fullmatch(r"[0-9a-f]{64}", digest):
             raise ValueError("--sha256 requires 64 lowercase hexadecimal digits")
-        return pathlib.Path(argv[1]).resolve(), digest
+        return pathlib.Path(argv[1]).absolute(), digest
     raise ValueError(f"usage: {argv[0]} <prefix> [--sha256 <64-hex>]")
 
 
@@ -87,21 +97,18 @@ def run_checked(args, *, cwd=None, env=None, timeout=BUILD_TIMEOUT_S):
     )
 
 
+def prepend_env_path(env, key, entry):
+    """Prepend `entry` to an `os.pathsep`-delimited environment variable."""
+    existing = env.get(key)
+    env[key] = f"{entry}{os.pathsep}{existing}" if existing else entry
+
+
 def runtime_env(prefix):
     """Build an environment mapping pointing at `prefix` libraries and binaries."""
     env = dict(os.environ)
-    lib_dir = str(prefix / "lib")
-    bin_dir = str(prefix / "bin")
-    pc_dir = str(prefix / "lib" / "pkgconfig")
-    env["PATH"] = f"{bin_dir}:{env['PATH']}" if env.get("PATH") else bin_dir
-    env["PKG_CONFIG_PATH"] = (
-        f"{pc_dir}:{env['PKG_CONFIG_PATH']}" if env.get("PKG_CONFIG_PATH") else pc_dir
-    )
-    env["LD_LIBRARY_PATH"] = (
-        f"{lib_dir}:{env['LD_LIBRARY_PATH']}"
-        if env.get("LD_LIBRARY_PATH")
-        else lib_dir
-    )
+    prepend_env_path(env, "PATH", str(prefix / "bin"))
+    prepend_env_path(env, "PKG_CONFIG_PATH", str(prefix / "lib" / "pkgconfig"))
+    prepend_env_path(env, "LD_LIBRARY_PATH", str(prefix / "lib"))
     return env
 
 
@@ -113,20 +120,27 @@ def expected_stamp(expected_sha256):
 
 def verify_installed(prefix, expected_sha256):
     """Check stamp, pkg-config metadata and `ffmpeg -version` output inside `prefix`."""
+    if prefix.is_symlink():
+        return False
     stamp = prefix / STAMP_NAME
     pc_file = prefix / "lib" / "pkgconfig" / "libavformat.pc"
     ffmpeg_bin = prefix / "bin" / "ffmpeg"
-    if not (stamp.is_file() and pc_file.is_file() and ffmpeg_bin.is_file()):
+    try:
+        if not (stamp.is_file() and pc_file.is_file() and ffmpeg_bin.is_file()):
+            return False
+        if stamp.read_text(encoding="utf-8").strip() != expected_stamp(expected_sha256):
+            return False
+        result = run_checked(
+            [str(ffmpeg_bin), "-version"],
+            env=runtime_env(prefix),
+            timeout=VERSION_TIMEOUT_S,
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
         return False
-    if stamp.read_text(encoding="utf-8").strip() != expected_stamp(expected_sha256):
+    lines = (result.stdout or b"").decode("utf-8", errors="replace").splitlines()
+    if not lines:
         return False
-    result = run_checked(
-        [str(ffmpeg_bin), "-version"],
-        env=runtime_env(prefix),
-        timeout=VERSION_TIMEOUT_S,
-    )
-    first_line = result.stdout.decode("utf-8", errors="replace").splitlines()[0]
-    return FFMPEG_TAG in first_line
+    return FFMPEG_TAG in lines[0]
 
 
 def require_release_url(url: str) -> None:
@@ -177,8 +191,13 @@ def safe_extract(archive_path, dest_dir):
     """Validate and unpack a `.tar.xz` archive without links, devices or traversal."""
     dest_dir.mkdir(parents=True, exist_ok=True)
     root = dest_dir.resolve()
+    deadline = time.monotonic() + EXTRACT_TIMEOUT_S
     with tarfile.open(archive_path, mode="r:xz") as tar:
         for index, member in enumerate(tar):
+            if time.monotonic() >= deadline:
+                raise TimeoutError(
+                    f"extracting {archive_path} exceeded {EXTRACT_TIMEOUT_S}s deadline"
+                )
             if index >= MAX_TAR_MEMBERS:
                 raise ValueError("archive member bound exceeded")
             if member.issym() or member.islnk() or member.isdev():
@@ -187,6 +206,10 @@ def safe_extract(archive_path, dest_dir):
             if not target.is_relative_to(root):
                 raise ValueError(f"archive path escapes destination: {member.name}")
             tar.extract(member, path=root, filter="data")
+        if time.monotonic() >= deadline:
+            raise TimeoutError(
+                f"extracting {archive_path} exceeded {EXTRACT_TIMEOUT_S}s deadline"
+            )
 
 
 def build_from_source(src_dir, prefix):
@@ -230,7 +253,12 @@ def write_github_env(prefix, env_file_path):
 
 def install(prefix, expected_sha256):
     """Install or reuse pinned FFmpeg at `prefix`, cleaning up any failed prefix."""
-    if not (prefix.is_dir() and verify_installed(prefix, expected_sha256)):
+    require_posix()
+    if not (
+        not prefix.is_symlink()
+        and prefix.is_dir()
+        and verify_installed(prefix, expected_sha256)
+    ):
         prepare_prefix(prefix)
         with tempfile.TemporaryDirectory() as work:
             work_dir = pathlib.Path(work)
@@ -259,6 +287,7 @@ def install(prefix, expected_sha256):
 def main(argv):
     """CLI entry point returning exit status."""
     try:
+        require_posix()
         prefix, expected_sha256 = parse_args(argv)
         install(prefix, expected_sha256)
     except (OSError, ValueError, RuntimeError, tarfile.TarError, urllib.error.URLError) as exc:

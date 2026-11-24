@@ -5,8 +5,10 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
+    io::Write,
     path::{Path, PathBuf},
 };
+use torcul_media::io::Deadline;
 use torcul_policy::{Plan, TitleMeta};
 
 #[derive(Deserialize)]
@@ -72,32 +74,42 @@ pub fn plans(paths: &[PathBuf], meta: &Metadata) -> Vec<FileReport> {
         .collect()
 }
 
-pub fn table(reports: &[FileReport]) {
-    println!("FILE | KEEP (input indices) | DROP | REMUX | WARNINGS");
+pub fn table(reports: &[FileReport]) -> Result<()> {
+    let deadline = Deadline::new();
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+    deadline.run(|| writeln!(out, "FILE | KEEP (input indices) | DROP | REMUX | WARNINGS"))?;
     for row in reports {
-        let name = row.path.file_name().unwrap_or_default().to_string_lossy();
-        if let Some(plan) = &row.plan {
-            let dropped = plan.dropped_indices();
-            let drop_col = if dropped.is_empty() {
-                "-".to_owned()
-            } else {
-                format!("drop (pending LID): {}", join_indices(&dropped))
-            };
-            println!(
-                "{} | {} | {} | {} | {}",
-                name,
-                join_indices(&plan.kept_indices()),
-                drop_col,
-                if plan.needs_remux { "yes" } else { "no" },
-                plan.warnings.join(",")
-            );
+        let line = format_row(row);
+        deadline.run(|| writeln!(out, "{line}"))?;
+    }
+    deadline.run(|| out.flush())?;
+    Ok(())
+}
+
+fn format_row(row: &FileReport) -> String {
+    let name = row.path.file_name().unwrap_or_default().to_string_lossy();
+    if let Some(plan) = &row.plan {
+        let dropped = plan.dropped_indices();
+        let drop_col = if dropped.is_empty() {
+            "-".to_owned()
         } else {
-            println!(
-                "{} | ERROR | - | - | {}",
-                name,
-                row.error.as_deref().unwrap_or("unknown error")
-            );
-        }
+            format!("drop (pending LID): {}", join_indices(&dropped))
+        };
+        format!(
+            "{} | {} | {} | {} | {}",
+            name,
+            join_indices(&plan.kept_indices()),
+            drop_col,
+            if plan.needs_remux { "yes" } else { "no" },
+            plan.warnings.join(",")
+        )
+    } else {
+        format!(
+            "{} | ERROR | - | - | {}",
+            name,
+            row.error.as_deref().unwrap_or("unknown error")
+        )
     }
 }
 

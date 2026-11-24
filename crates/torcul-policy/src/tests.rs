@@ -253,3 +253,28 @@ fn all_undetermined_and_invalid_original_rejected() {
         );
     }
 }
+
+#[test]
+fn undetermined_trimmed_and_padded_known_codes() {
+    for raw in [
+        None,
+        Some(""),
+        Some("  "),
+        Some("UND"),
+        Some(" und "),
+        Some("\tUnD\n"),
+    ] {
+        assert!(undetermined(raw), "expected undetermined for {raw:?}");
+        let p = audio(&[raw, Some("spa")], Some("en"), false);
+        assert_eq!(p.kept_indices(), [0], "failed for {raw:?}");
+        assert_eq!(p.decisions[0].reason, "language-undetermined");
+        assert_eq!(p.warnings, ["language-undetermined"]);
+    }
+    for known in [Some("eng"), Some(" eng ")] {
+        assert!(!undetermined(known), "expected determined for {known:?}");
+        let p = audio(&[known, Some("spa")], Some("en"), false);
+        assert_eq!(p.kept_indices(), [0], "failed for {known:?}");
+        assert_eq!(p.decisions[0].reason, "preferred-language");
+        assert!(p.warnings.is_empty(), "unexpected warnings for {known:?}");
+    }
+}

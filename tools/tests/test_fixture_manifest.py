@@ -58,6 +58,24 @@ class FixtureManifestTests(unittest.TestCase):
         self.assertIn("START=666\nEND=1333\ntitle=Chapter 2\n", text)
         self.assertIn("START=1333\nEND=2000\ntitle=Chapter 3\n", text)
 
+    def test_chapter_metadata_boundaries(self):
+        """Reject negative or >MAX_CHAPTERS counts; 0 emits header only; MAX_CHAPTERS emits exact count."""
+        for invalid in (-1, FIXTURES.MAX_CHAPTERS + 1):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                FIXTURES.chapter_metadata(2, invalid)
+
+        zero = FIXTURES.chapter_metadata(2, 0)
+        self.assertEqual(zero, ";FFMETADATA1\n")
+        self.assertNotIn("[CHAPTER]", zero)
+
+        maximum = FIXTURES.chapter_metadata(2, FIXTURES.MAX_CHAPTERS)
+        self.assertTrue(maximum.startswith(";FFMETADATA1\n"))
+        self.assertEqual(maximum.count("[CHAPTER]\n"), FIXTURES.MAX_CHAPTERS)
+        self.assertIn("START=0\nEND=2\ntitle=Chapter 1\n", maximum)
+        self.assertIn(
+            f"START=1998\nEND=2000\ntitle=Chapter {FIXTURES.MAX_CHAPTERS}\n", maximum
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

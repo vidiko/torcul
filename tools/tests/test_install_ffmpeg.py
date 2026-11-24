@@ -6,8 +6,10 @@ import hashlib
 import io
 import os
 import re
+import subprocess
 import tarfile
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -159,6 +161,257 @@ class InstallFfmpegTests(unittest.TestCase):
                     with self.assertRaises(ValueError) as direct:
                         installer.require_release_url(url)
                     self.assertIn(url, str(direct.exception))
+
+
+def populate_prefix(installer, prefix, sha=None, *, write_stamp=True):
+    """Create the expected bin/ffmpeg, pkgconfig and optional stamp files."""
+    (prefix / "bin").mkdir(parents=True, exist_ok=True)
+    (prefix / "lib" / "pkgconfig").mkdir(parents=True, exist_ok=True)
+    (prefix / "bin" / "ffmpeg").write_bytes(b"#!/bin/sh\n")
+    (prefix / "lib" / "pkgconfig" / "libavformat.pc").write_text(
+        "Name: libavformat\n", encoding="utf-8"
+    )
+    if write_stamp:
+        digest = sha or installer.FFMPEG_SHA256
+        (prefix / installer.STAMP_NAME).write_text(
+            f"{installer.expected_stamp(digest)}\n", encoding="utf-8"
+        )
+
+
+def make_small_archive(archive_path, installer):
+    """Write a minimal valid `.tar.xz` with two regular files."""
+    buf = io.BytesIO()
+    base = f"ffmpeg-{installer.FFMPEG_VERSION}"
+    with tarfile.open(fileobj=buf, mode="w:xz") as tar:
+        for rel, content in (("RELEASE", f"{installer.FFMPEG_VERSION}\n"), ("README", "ok\n")):
+            payload = content.encode("utf-8")
+            info = tarfile.TarInfo(name=f"{base}/{rel}")
+            info.size = len(payload)
+            tar.addfile(info, io.BytesIO(payload))
+    archive_path.write_bytes(buf.getvalue())
+
+
+class InstallFfmpegRoundOneTests(unittest.TestCase):
+    """Cover C7 probe failures, install lifecycle, symlink args, extract deadline and OS check."""
+
+    def test_verify_installed_handles_probe_errors_empty_and_valid_stdout(self):
+        """Probe failures or empty stdout return False; matching version tag returns True."""
+        installer = load_tool("ci/install_ffmpeg.py")
+        with tempfile.TemporaryDirectory() as directory:
+            prefix = Path(directory) / "prefix"
+            populate_prefix(installer, prefix)
+            errors = (
+                subprocess.CalledProcessError(127, ["ffmpeg", "-version"]),
+                subprocess.TimeoutExpired(["ffmpeg", "-version"], 30),
+                OSError("exec format error"),
+            )
+            for err in errors:
+                with self.subTest(err=type(err).__name__):
+                    with mock.patch.object(installer, "run_checked", side_effect=err):
+                        self.assertFalse(
+                            installer.verify_installed(prefix, installer.FFMPEG_SHA256)
+                        )
+            empty = types.SimpleNamespace(stdout=b"")
+            with mock.patch.object(installer, "run_checked", return_value=empty):
+                self.assertFalse(
+                    installer.verify_installed(prefix, installer.FFMPEG_SHA256)
+                )
+            good = types.SimpleNamespace(
+                stdout=f"ffmpeg version {installer.FFMPEG_TAG} Copyright\n".encode("utf-8")
+            )
+            with mock.patch.object(installer, "run_checked", return_value=good):
+                self.assertTrue(
+                    installer.verify_installed(prefix, installer.FFMPEG_SHA256)
+                )
+
+    def test_install_fresh_and_valid_cached_prefix(self):
+        """Fresh install writes stamp; valid cached prefix skips download and build."""
+        installer = load_tool("ci/install_ffmpeg.py")
+        sha = installer.FFMPEG_SHA256
+        good = types.SimpleNamespace(
+            stdout=f"ffmpeg version {installer.FFMPEG_TAG}\n".encode("utf-8")
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            prefix = Path(directory) / "prefix"
+            with (
+                mock.patch.object(installer, "download_and_verify") as dl,
+                mock.patch.object(installer, "safe_extract") as ext,
+                mock.patch.object(
+                    installer,
+                    "build_from_source",
+                    side_effect=lambda src, dst: populate_prefix(
+                        installer, dst, sha, write_stamp=False
+                    ),
+                ) as bld,
+                mock.patch.object(installer, "run_checked", return_value=good),
+            ):
+                installer.install(prefix, sha)
+            dl.assert_called_once()
+            ext.assert_called_once()
+            bld.assert_called_once()
+            self.assertEqual(
+                (prefix / installer.STAMP_NAME).read_text(encoding="utf-8").strip(),
+                installer.expected_stamp(sha),
+            )
+            with (
+                mock.patch.object(installer, "download_and_verify") as dl2,
+                mock.patch.object(installer, "safe_extract") as ext2,
+                mock.patch.object(installer, "build_from_source") as bld2,
+                mock.patch.object(installer, "run_checked", return_value=good),
+            ):
+                installer.install(prefix, sha)
+            dl2.assert_not_called()
+            ext2.assert_not_called()
+            bld2.assert_not_called()
+
+    def test_install_rebuilds_cached_prefix_when_probe_fails(self):
+        """A cached prefix whose probe raises CalledProcessError is wiped and rebuilt."""
+        installer = load_tool("ci/install_ffmpeg.py")
+        sha = installer.FFMPEG_SHA256
+        good = types.SimpleNamespace(
+            stdout=f"ffmpeg version {installer.FFMPEG_TAG}\n".encode("utf-8")
+        )
+        probe_err = subprocess.CalledProcessError(1, ["ffmpeg", "-version"])
+        with tempfile.TemporaryDirectory() as directory:
+            prefix = Path(directory) / "prefix"
+            populate_prefix(installer, prefix, sha, write_stamp=True)
+            stale_marker = prefix / "stale.txt"
+            stale_marker.write_text("old", encoding="utf-8")
+            with (
+                mock.patch.object(installer, "download_and_verify") as dl,
+                mock.patch.object(installer, "safe_extract") as ext,
+                mock.patch.object(
+                    installer,
+                    "build_from_source",
+                    side_effect=lambda src, dst: populate_prefix(
+                        installer, dst, sha, write_stamp=False
+                    ),
+                ) as bld,
+                mock.patch.object(
+                    installer, "run_checked", side_effect=[probe_err, good]
+                ),
+            ):
+                installer.install(prefix, sha)
+            dl.assert_called_once()
+            ext.assert_called_once()
+            bld.assert_called_once()
+            self.assertFalse(stale_marker.exists())
+            self.assertTrue((prefix / installer.STAMP_NAME).is_file())
+
+    def test_install_cleans_prefix_on_build_or_post_probe_failure(self):
+        """Build exceptions and post-install probe failures remove prefix and propagate."""
+        installer = load_tool("ci/install_ffmpeg.py")
+        sha = installer.FFMPEG_SHA256
+        with tempfile.TemporaryDirectory() as directory:
+            prefix = Path(directory) / "build-fail"
+            boom = RuntimeError("make failed")
+
+            def partial_build(_src, dst):
+                populate_prefix(installer, dst, sha, write_stamp=False)
+                raise boom
+
+            with (
+                mock.patch.object(installer, "download_and_verify"),
+                mock.patch.object(installer, "safe_extract"),
+                mock.patch.object(
+                    installer, "build_from_source", side_effect=partial_build
+                ),
+                self.assertRaises(RuntimeError) as raised,
+            ):
+                installer.install(prefix, sha)
+            self.assertIs(raised.exception, boom)
+            self.assertFalse(os.path.lexists(prefix))
+
+            post_fail = Path(directory) / "probe-fail"
+            bad_probe = types.SimpleNamespace(stdout=b"ffmpeg version n8.0\n")
+            with (
+                mock.patch.object(installer, "download_and_verify"),
+                mock.patch.object(installer, "safe_extract"),
+                mock.patch.object(
+                    installer,
+                    "build_from_source",
+                    side_effect=lambda src, dst: populate_prefix(
+                        installer, dst, sha, write_stamp=False
+                    ),
+                ),
+                mock.patch.object(installer, "run_checked", return_value=bad_probe),
+                self.assertRaisesRegex(RuntimeError, "post-install version check"),
+            ):
+                installer.install(post_fail, sha)
+            self.assertFalse(os.path.lexists(post_fail))
+
+    def test_parse_args_keeps_symlink_unresolved(self):
+        """parse_args preserves symlink paths so prepare_prefix detects is_symlink()."""
+        installer = load_tool("ci/install_ffmpeg.py")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            real = root / "real_dir"
+            real.mkdir()
+            sym = root / "sym_prefix"
+            sym.symlink_to(real)
+            parsed, digest = installer.parse_args(["install_ffmpeg.py", str(sym)])
+            self.assertTrue(parsed.is_symlink())
+            self.assertEqual(digest, installer.FFMPEG_SHA256)
+            parsed2, digest2 = installer.parse_args(
+                ["install_ffmpeg.py", str(sym), "--sha256", "a" * 64]
+            )
+            self.assertTrue(parsed2.is_symlink())
+            self.assertEqual(digest2, "a" * 64)
+
+    def test_safe_extract_enforces_deadline_and_extracts_valid_tar(self):
+        """safe_extract raises TimeoutError naming the archive on expiry and unpacks valid tar."""
+        installer = load_tool("ci/install_ffmpeg.py")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            archive = root / "sample.tar.xz"
+            make_small_archive(archive, installer)
+            with mock.patch(
+                "time.monotonic",
+                side_effect=[10.0, 10.0 + getattr(installer, "EXTRACT_TIMEOUT_S", 300) + 1.0],
+            ):
+                with self.assertRaises(TimeoutError) as raised:
+                    installer.safe_extract(archive, root / "timed_out")
+                self.assertIn(str(archive), str(raised.exception))
+
+            out_dir = root / "extracted"
+            installer.safe_extract(archive, out_dir)
+            base = out_dir / f"ffmpeg-{installer.FFMPEG_VERSION}"
+            self.assertEqual(
+                (base / "RELEASE").read_text(encoding="utf-8").strip(),
+                installer.FFMPEG_VERSION,
+            )
+            self.assertEqual((base / "README").read_text(encoding="utf-8"), "ok\n")
+
+    def test_non_posix_os_exits_with_message(self):
+        """Non-POSIX os.name exits nonzero with an explicit POSIX requirement message."""
+        installer = load_tool("ci/install_ffmpeg.py")
+        stderr = io.StringIO()
+        with (
+            mock.patch.object(installer.os, "name", "nt"),
+            mock.patch("sys.stderr", stderr),
+        ):
+            rc = installer.main(["install_ffmpeg.py", "C:/ffmpeg"])
+        self.assertNotEqual(rc, 0)
+        self.assertIn("POSIX", stderr.getvalue())
+
+    def test_runtime_env_uses_os_pathsep(self):
+        """runtime_env joins PATH and PKG_CONFIG_PATH entries with os.pathsep."""
+        installer = load_tool("ci/install_ffmpeg.py")
+        prefix = Path("/opt/ci-ffmpeg")
+        with (
+            mock.patch.dict(
+                os.environ,
+                {"PATH": "/usr/bin", "PKG_CONFIG_PATH": "/usr/lib/pkgconfig"},
+                clear=False,
+            ),
+            mock.patch.object(installer.os, "pathsep", ";"),
+        ):
+            env = installer.runtime_env(prefix)
+        self.assertEqual(env["PATH"], f"{prefix / 'bin'};/usr/bin")
+        self.assertEqual(
+            env["PKG_CONFIG_PATH"],
+            f"{prefix / 'lib' / 'pkgconfig'};/usr/lib/pkgconfig",
+        )
 
 
 if __name__ == "__main__":

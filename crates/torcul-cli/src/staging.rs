@@ -15,6 +15,9 @@ use torcul_policy::{FileFacts, Plan, TitleMeta};
 
 const MAX_PATH_ANCESTORS: usize = 4096;
 
+#[cfg(test)]
+mod staging_tests;
+
 #[derive(Serialize, Deserialize)]
 pub struct Record {
     version: u32,
@@ -48,10 +51,7 @@ pub fn prepare(src: &Path, staging: &Path, meta: &Metadata) -> Result<()> {
     deadline.run(|| std::fs::create_dir_all(staging))?;
     same_device(before.dev, path_dev(staging, deadline)?)?;
     let (output, sidecar) = paths(src, staging)?;
-    ensure!(
-        !deadline.run(|| sidecar.try_exists())?,
-        "staging sidecar already exists"
-    );
+    ensure_absent(&sidecar, deadline, "staging sidecar already exists")?;
     let record = Record {
         version: 1,
         source: files::canonical(src)?,
@@ -63,13 +63,43 @@ pub fn prepare(src: &Path, staging: &Path, meta: &Metadata) -> Result<()> {
         verified_staging: None,
     };
     torcul_media::remux(src, &record.plan, &output)?;
-    let result = save_new(src, &sidecar, &record);
+    commit_staged(src, &output, &sidecar, &record, deadline)
+}
+
+fn ensure_absent(path: &Path, deadline: Deadline, message: &'static str) -> Result<()> {
+    match deadline.run(|| std::fs::symlink_metadata(path)) {
+        Ok(_) => bail!("{message}"),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e).with_context(|| format!("stat {}", path.display())),
+    }
+}
+
+fn commit_staged(
+    src: &Path,
+    output: &Path,
+    sidecar: &Path,
+    record: &Record,
+    deadline: Deadline,
+) -> Result<()> {
+    let result = save_new(src, sidecar, record, deadline);
     if result.is_err() {
-        deadline
-            .remove_partial(&output)
-            .context("remove unrecorded staging")?;
+        cleanup_attempt(deadline, output, sidecar)?;
     }
     result
+}
+
+fn cleanup_attempt(deadline: Deadline, output: &Path, sidecar: &Path) -> Result<()> {
+    let out_res = remove_created(deadline, output, "remove unrecorded staging");
+    let side_res = remove_created(deadline, sidecar, "remove partial sidecar");
+    out_res.and(side_res)
+}
+
+fn remove_created(deadline: Deadline, path: &Path, label: &'static str) -> Result<()> {
+    match deadline.remove_partial(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e).context(label),
+    }
 }
 
 fn check_staging_device(source_dev: u64, staging: &Path, deadline: Deadline) -> Result<()> {
@@ -87,12 +117,13 @@ fn check_staging_device(source_dev: u64, staging: &Path, deadline: Deadline) -> 
     bail!("cannot locate existing ancestor for {}", staging.display())
 }
 
-fn save_new(src: &Path, sidecar: &Path, record: &Record) -> Result<()> {
+fn save_new(src: &Path, sidecar: &Path, record: &Record, deadline: Deadline) -> Result<()> {
     ensure!(
         fingerprint(src)? == record.fingerprint,
         "source changed during remux"
     );
-    files::write_json(sidecar, record)
+    files::write_json(sidecar, record)?;
+    deadline.check().context("staging completion deadline")
 }
 
 pub fn load(src: &Path, staging: &Path) -> Result<(PathBuf, PathBuf, Record)> {

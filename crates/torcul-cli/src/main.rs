@@ -6,10 +6,12 @@ mod report;
 mod staging;
 use anyhow::{Result, bail};
 use clap::Parser;
+use std::io::Write;
+use torcul_media::io::Deadline;
 
 fn main() {
     if let Err(error) = run(args::Cli::parse()) {
-        eprintln!("torcul: {error:#}");
+        let _ = writeln!(std::io::stderr(), "torcul: {error:#}");
         std::process::exit(1);
     }
 }
@@ -17,18 +19,22 @@ fn main() {
 fn run(cli: args::Cli) -> Result<()> {
     match cli.command {
         args::Command::Plan {
-            meta,
+            meta: meta_path,
             json,
             files: paths,
         } => {
-            let meta = report::metadata(&meta)?;
-            let reports = report::plans(&files::expand(&paths)?, &meta);
-            report::table(&reports);
-            if let Some(path) = json {
-                files::write_json(&path, &reports)?;
+            let expanded = files::expand(&paths)?;
+            if let Some(path) = &json {
+                files::check_json_destination(path, &meta_path, &expanded)?;
             }
+            let meta = report::metadata(&meta_path)?;
+            let reports = report::plans(&expanded, &meta);
+            report::table(&reports)?;
             if reports.iter().any(|r| r.error.is_some()) {
                 bail!("one or more files failed planning");
+            }
+            if let Some(path) = json {
+                files::write_json(&path, &reports)?;
             }
             Ok(())
         }
@@ -53,9 +59,12 @@ fn batch(
     let mut failed = false;
     for path in paths {
         match operation(path) {
-            Ok(()) => println!("{}: ok", path.display()),
+            Ok(()) => write_line(std::io::stdout().lock(), &format!("{}: ok", path.display()))?,
             Err(e) => {
-                eprintln!("{}: {e:#}", path.display());
+                write_line(
+                    std::io::stderr().lock(),
+                    &format!("{}: {e:#}", path.display()),
+                )?;
                 failed = true;
             }
         }
@@ -63,5 +72,14 @@ fn batch(
     if failed {
         bail!("one or more files failed");
     }
+    Ok(())
+}
+
+fn write_line(mut stream: impl Write, line: &str) -> Result<()> {
+    let deadline = Deadline::new();
+    deadline.run(|| {
+        writeln!(stream, "{line}")?;
+        stream.flush()
+    })?;
     Ok(())
 }
