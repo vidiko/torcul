@@ -86,8 +86,8 @@ def run_checked(args, *, cwd=None, env=None, timeout=BUILD_TIMEOUT_S):
     if exe is None:
         raise FileNotFoundError(f"required executable not on PATH: {args[0]}")
     argv = [exe, *args[1:]]
+    # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit, python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args -- argv list, no shell, argv[0] resolved through shutil.which; only the --prefix path comes from the command line; category D, expires 2027-03-24, ends when the CI runner image ships FFmpeg 9 and this installer goes
     return subprocess.run(  # nosec B603 # argv list with resolved executable and shell=False
-        # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args -- argv list, no shell, argv[0] resolved through shutil.which; only the --prefix path comes from the command line; category D, expires 2027-03-24, ends when the CI runner image ships FFmpeg 9 and this installer goes
         argv,
         cwd=cwd,
         env=env,

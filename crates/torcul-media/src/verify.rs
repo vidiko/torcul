@@ -248,10 +248,17 @@ pub fn compare_packets(
     for (idx, (sp, dp)) in src.iter().zip(dst).enumerate() {
         scratch.clear();
         packet_mismatches(
-            (sp, src_tb),
-            (dp, dst_tb),
+            TimedPacket {
+                packet: sp,
+                tb: src_tb,
+            },
+            TimedPacket {
+                packet: dp,
+                tb: dst_tb,
+            },
             coarse,
-            (label, idx),
+            label,
+            idx,
             &mut scratch,
         );
         for msg in scratch.drain(..) {
@@ -268,13 +275,22 @@ pub fn compare_packets(
     }
 }
 
+#[derive(Clone, Copy)]
+struct TimedPacket<'a> {
+    packet: &'a PacketRecord,
+    tb: TimeBase,
+}
+
 fn packet_mismatches(
-    (sp, src_tb): (&PacketRecord, TimeBase),
-    (dp, dst_tb): (&PacketRecord, TimeBase),
+    src: TimedPacket<'_>,
+    dst: TimedPacket<'_>,
     coarse: TimeBase,
-    (label, idx): (&str, usize),
+    label: &str,
+    idx: usize,
     out: &mut Vec<String>,
 ) {
+    let (sp, src_tb) = (src.packet, src.tb);
+    let (dp, dst_tb) = (dst.packet, dst.tb);
     if sp.size != dp.size {
         out.push(format!("{label}-pkt-{idx}-size"));
     }

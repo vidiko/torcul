@@ -6,7 +6,6 @@ import hashlib
 import io
 import os
 import re
-import subprocess
 import tarfile
 import tempfile
 import types
@@ -201,23 +200,25 @@ class InstallFfmpegRoundOneTests(unittest.TestCase):
             prefix = Path(directory) / "prefix"
             populate_prefix(installer, prefix)
             errors = (
-                subprocess.CalledProcessError(127, ["ffmpeg", "-version"]),
-                subprocess.TimeoutExpired(["ffmpeg", "-version"], 30),
+                installer.subprocess.CalledProcessError(127, ["ffmpeg", "-version"]),
+                installer.subprocess.TimeoutExpired(["ffmpeg", "-version"], 30),
                 OSError("exec format error"),
             )
             for err in errors:
-                with self.subTest(err=type(err).__name__):
-                    with mock.patch.object(installer, "run_checked", side_effect=err):
-                        self.assertFalse(
-                            installer.verify_installed(prefix, installer.FFMPEG_SHA256)
-                        )
+                with (
+                    self.subTest(err=type(err).__name__),
+                    mock.patch.object(installer, "run_checked", side_effect=err),
+                ):
+                    self.assertFalse(
+                        installer.verify_installed(prefix, installer.FFMPEG_SHA256)
+                    )
             empty = types.SimpleNamespace(stdout=b"")
             with mock.patch.object(installer, "run_checked", return_value=empty):
                 self.assertFalse(
                     installer.verify_installed(prefix, installer.FFMPEG_SHA256)
                 )
             good = types.SimpleNamespace(
-                stdout=f"ffmpeg version {installer.FFMPEG_TAG} Copyright\n".encode("utf-8")
+                stdout=f"ffmpeg version {installer.FFMPEG_TAG} Copyright\n".encode()
             )
             with mock.patch.object(installer, "run_checked", return_value=good):
                 self.assertTrue(
@@ -229,7 +230,7 @@ class InstallFfmpegRoundOneTests(unittest.TestCase):
         installer = load_tool("ci/install_ffmpeg.py")
         sha = installer.FFMPEG_SHA256
         good = types.SimpleNamespace(
-            stdout=f"ffmpeg version {installer.FFMPEG_TAG}\n".encode("utf-8")
+            stdout=f"ffmpeg version {installer.FFMPEG_TAG}\n".encode()
         )
         with tempfile.TemporaryDirectory() as directory:
             prefix = Path(directory) / "prefix"
@@ -269,9 +270,9 @@ class InstallFfmpegRoundOneTests(unittest.TestCase):
         installer = load_tool("ci/install_ffmpeg.py")
         sha = installer.FFMPEG_SHA256
         good = types.SimpleNamespace(
-            stdout=f"ffmpeg version {installer.FFMPEG_TAG}\n".encode("utf-8")
+            stdout=f"ffmpeg version {installer.FFMPEG_TAG}\n".encode()
         )
-        probe_err = subprocess.CalledProcessError(1, ["ffmpeg", "-version"])
+        probe_err = installer.subprocess.CalledProcessError(1, ["ffmpeg", "-version"])
         with tempfile.TemporaryDirectory() as directory:
             prefix = Path(directory) / "prefix"
             populate_prefix(installer, prefix, sha, write_stamp=True)

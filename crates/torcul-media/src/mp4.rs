@@ -29,23 +29,10 @@ pub(crate) fn preserve(src: &Path, path: &Path, plan: &Plan, deadline: Deadline)
     };
     let source_index = boxes::index(&mut source)?;
     let output_index = boxes::index(&mut output)?;
-    let old_ftyp = boxes::get(&output_index, b"ftyp")?;
-    let old_moov = boxes::get(&output_index, b"moov")?;
-    if old_ftyp.start != 0
-        || output_index
-            .last()
-            .is_none_or(|b| b.start != old_moov.start)
-    {
-        return Err(Error::Invalid(
-            "expected staged MP4 ftyp first and moov last".into(),
-        ));
-    }
-    let new_ftyp = boxes::encode(&boxes::load(
-        &mut source,
-        boxes::get(&source_index, b"ftyp")?,
-    )?)?;
+    let (old_ftyp, old_moov) = staged_layout(&output_index)?;
+    let new_ftyp = boxes::encode(&load_named(&mut source, &source_index, b"ftyp")?)?;
     let delta = new_ftyp.len() as i64 - old_ftyp.end as i64;
-    let source_moov = boxes::load(&mut source, boxes::get(&source_index, b"moov")?)?;
+    let source_moov = load_named(&mut source, &source_index, b"moov")?;
     let output_moov = boxes::load(&mut output, old_moov)?;
     let new_moov = boxes::encode(&mp4_movie::movie(&source_moov, &output_moov, &ids, delta)?)?;
     replace(
@@ -56,6 +43,28 @@ pub(crate) fn preserve(src: &Path, path: &Path, plan: &Plan, deadline: Deadline)
         &new_ftyp,
         &new_moov,
     )
+}
+fn staged_layout(output_index: &[boxes::Location]) -> Result<(&boxes::Location, &boxes::Location)> {
+    let old_ftyp = boxes::get(output_index, b"ftyp")?;
+    let old_moov = boxes::get(output_index, b"moov")?;
+    if old_ftyp.start != 0
+        || output_index
+            .last()
+            .is_none_or(|b| b.start != old_moov.start)
+    {
+        return Err(Error::Invalid(
+            "expected staged MP4 ftyp first and moov last".into(),
+        ));
+    }
+    Ok((old_ftyp, old_moov))
+}
+fn load_named(
+    file: &mut TimedFile,
+    index: &[boxes::Location],
+    kind: &[u8; 4],
+) -> Result<boxes::Raw> {
+    let location = boxes::get(index, kind)?;
+    boxes::load(file, location)
 }
 fn track_ids(
     src: &Path,

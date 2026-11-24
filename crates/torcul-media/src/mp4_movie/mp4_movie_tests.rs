@@ -72,33 +72,46 @@ fn extract_co64_entries(moov: &Raw) -> TestResult<Vec<u64>> {
     Ok(Co64::decode_body(&mut co64.body.as_slice())?.entries)
 }
 
+fn rewritten_co64_entries(
+    src: &Raw,
+    out: &Raw,
+    ids: &BTreeMap<u32, u32>,
+    delta: i64,
+) -> TestResult<Vec<u64>> {
+    let rewritten = movie(src, out, ids, delta)?;
+    extract_co64_entries(&rewritten)
+}
+
 #[test]
 fn movie_rewrites_stco_and_co64_for_positive_negative_and_zero_deltas() -> TestResult<()> {
     let ids = BTreeMap::from([(1, 1)]);
     let src = build_moov(1, raw_stco(&[100, 200])?)?;
 
     let out_stco = build_moov(1, raw_stco(&[100, 250])?)?;
-    let pos_stco = movie(&src, &out_stco, &ids, 24)?;
-    assert_eq!(extract_co64_entries(&pos_stco)?, vec![124, 274]);
-    let neg_stco = movie(&src, &out_stco, &ids, -16)?;
-    assert_eq!(extract_co64_entries(&neg_stco)?, vec![84, 234]);
-    let zero_stco = movie(&src, &out_stco, &ids, 0)?;
-    assert_eq!(extract_co64_entries(&zero_stco)?, vec![100, 250]);
+    assert_eq!(
+        rewritten_co64_entries(&src, &out_stco, &ids, 24)?,
+        vec![124, 274]
+    );
+    assert_eq!(
+        rewritten_co64_entries(&src, &out_stco, &ids, -16)?,
+        vec![84, 234]
+    );
+    assert_eq!(
+        rewritten_co64_entries(&src, &out_stco, &ids, 0)?,
+        vec![100, 250]
+    );
 
     let out_co64 = build_moov(1, raw_co64(&[5_000_000_000, 6_000_000_000])?)?;
-    let pos_co64 = movie(&src, &out_co64, &ids, 32)?;
     assert_eq!(
-        extract_co64_entries(&pos_co64)?,
+        rewritten_co64_entries(&src, &out_co64, &ids, 32)?,
         vec![5_000_000_032, 6_000_000_032]
     );
-    let neg_co64 = movie(&src, &out_co64, &ids, -32)?;
     assert_eq!(
-        extract_co64_entries(&neg_co64)?,
+        rewritten_co64_entries(&src, &out_co64, &ids, -32)?,
         vec![4_999_999_968, 5_999_999_968]
     );
-    let zero_co64 = movie(&src, &out_co64, &ids, 0)?;
     assert_eq!(
-        extract_co64_entries(&zero_co64)?,
+        rewritten_co64_entries(&src, &out_co64, &ids, 0)?,
         vec![5_000_000_000, 6_000_000_000]
     );
     Ok(())
