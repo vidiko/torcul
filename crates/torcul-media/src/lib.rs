@@ -1,5 +1,14 @@
 // SPDX-FileCopyrightText: 2026 Lusoris <lusoris@pm.me>
 // SPDX-License-Identifier: EUPL-1.2
+//! Probe, remux into staging, and verify media files through FFmpeg, with a source I/O layer.
+//!
+//! The default `ffmpeg` feature links FFmpeg through `ffmpeg-next` and enables `probe`,
+//! `snapshot`, `remux`, `verify`, `verify_snapshots`, the `compare_*` functions, and model types.
+//! With `default-features = false`, only the `io` module, `Error`, and `Result` remain, and
+//! `Error` has no `Ffmpeg` or `Atom` variant. This build needs no FFmpeg development files and is
+//! used by the Windows CI job. Consumers that turn default features off and call these items
+//! must enable `features = ["ffmpeg"]`.
+
 mod error;
 #[cfg(feature = "ffmpeg")]
 mod inspect;

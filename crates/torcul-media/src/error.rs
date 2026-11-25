@@ -4,6 +4,7 @@
 pub enum Error {
     #[cfg(feature = "ffmpeg")]
     #[error("{operation}: {source}")]
+    /// Only with the `ffmpeg` feature.
     Ffmpeg {
         operation: &'static str,
         source: ffmpeg_next::Error,
@@ -15,6 +16,7 @@ pub enum Error {
     },
     #[cfg(feature = "ffmpeg")]
     #[error("MP4 atom: {0}")]
+    /// Only with the `ffmpeg` feature.
     Atom(#[from] mp4_atom::Error),
     #[error("{0}")]
     Invalid(String),
