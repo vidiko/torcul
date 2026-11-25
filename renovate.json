@@ -1,0 +1,34 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": [
+    "The fleet preset github>plurano/horistes supplies the recommended base, sign-off on the bot's commits, no merge by the bot, and go mod tidy after a Go module update. It requires three days of waiting after a release, with no wait for a fix of a known vulnerability. Releases from the family's own organisations and container image digest updates also skip the wait, with forks of outside projects keeping the three days in both cases. Add only this repository's own rules here."
+  ],
+  "extends": [
+    "github>plurano/horistes"
+  ],
+  "packageRules": [
+    {
+      "description": "praetor-managed files: praetorctl adopt ships their updates and praetorctl audit locks them byte for byte",
+      "matchFileNames": [
+        ".devcontainer/devcontainer.json",
+        ".devcontainer/Dockerfile.praetor",
+        ".github/workflows/reuse.yml",
+        ".config/reuse/requirements.txt"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "praetor-managed engine: updates arrive in one coordinated adoption pull request",
+      "matchPackageNames": [
+        "github.com/cordanaLLM/praetor",
+        "github.com/cordanaLLM/praetor/**",
+        "github.com/cordanaLLM/praetor/cmd/standardsctl",
+        "cordanaLLM/praetor",
+        "cordanaLLM/praetor/**",
+        "tekmora/praetor",
+        "tekmora/praetor/**"
+      ],
+      "enabled": false
+    }
+  ]
+}
