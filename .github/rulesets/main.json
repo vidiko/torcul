@@ -47,6 +47,9 @@
             "context": "Verification gate"
           },
           {
+            "context": "Windows I/O tests"
+          },
+          {
             "context": "REUSE lint"
           }
         ],

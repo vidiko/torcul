@@ -6,13 +6,17 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = ["ffmpeg"]
+ffmpeg = ["dep:ffmpeg-next", "dep:mp4-atom", "dep:torcul-policy"]
+
 [dependencies]
-torcul-policy.workspace = true
-ffmpeg-next = { version = "=9.1.0", default-features = false, features = ["format", "codec"] }
+torcul-policy = { workspace = true, optional = true }
+ffmpeg-next = { version = "=9.1.0", default-features = false, features = ["format", "codec"], optional = true }
 serde.workspace = true
 thiserror.workspace = true
 sha2.workspace = true
-mp4-atom = "=0.17.1"
+mp4-atom = { version = "=0.17.1", optional = true }
 tempfile.workspace = true
 
 [target.'cfg(unix)'.dependencies]
@@ -21,3 +25,15 @@ libc.workspace = true
 [dev-dependencies]
 serde_json.workspace = true
 wait-timeout.workspace = true
+
+[[test]]
+name = "metadata_round_trip"
+required-features = ["ffmpeg"]
+
+[[test]]
+name = "staging_verify"
+required-features = ["ffmpeg"]
+
+[[test]]
+name = "track_policy"
+required-features = ["ffmpeg"]

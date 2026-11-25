@@ -3,9 +3,11 @@
 use crate::{Error, Result, error::fs};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+#[cfg(feature = "ffmpeg")]
+use std::io::{Seek, SeekFrom, Write};
 use std::{
     fs::File,
-    io::{Read, Seek, SeekFrom, Write},
+    io::Read,
     path::Path,
     time::{Duration, Instant, UNIX_EPOCH},
 };
@@ -119,34 +121,37 @@ fn open_read_only(_path: &Path) -> std::io::Result<File> {
     ))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "ffmpeg"))]
 std::thread_local! {
     static TIMED_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "ffmpeg"))]
 pub(crate) fn reset_timed_reads() {
     TIMED_READS.with(|c| c.set(0));
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "ffmpeg"))]
 pub(crate) fn timed_reads() -> usize {
     TIMED_READS.with(std::cell::Cell::get)
 }
 
+#[cfg(feature = "ffmpeg")]
 pub(crate) struct TimedFile {
     pub file: File,
     pub deadline: Deadline,
 }
 
+#[cfg(feature = "ffmpeg")]
 impl Read for TimedFile {
     fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
-        #[cfg(test)]
+        #[cfg(all(test, feature = "ffmpeg"))]
         TIMED_READS.with(|c| c.set(c.get().saturating_add(1)));
         self.deadline.run(|| self.file.read(buffer))
     }
 }
 
+#[cfg(feature = "ffmpeg")]
 impl Write for TimedFile {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
         self.deadline.run(|| self.file.write(bytes))
@@ -157,6 +162,7 @@ impl Write for TimedFile {
     }
 }
 
+#[cfg(feature = "ffmpeg")]
 impl Seek for TimedFile {
     fn seek(&mut self, position: SeekFrom) -> std::io::Result<u64> {
         self.deadline.run(|| self.file.seek(position))

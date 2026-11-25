@@ -1,24 +1,36 @@
 // SPDX-FileCopyrightText: 2026 Lusoris <lusoris@pm.me>
 // SPDX-License-Identifier: EUPL-1.2
 mod error;
+#[cfg(feature = "ffmpeg")]
 mod inspect;
 pub mod io;
+#[cfg(feature = "ffmpeg")]
 mod model;
+#[cfg(feature = "ffmpeg")]
 mod mp4;
+#[cfg(feature = "ffmpeg")]
 mod mp4_boxes;
+#[cfg(feature = "ffmpeg")]
 mod mp4_movie;
+#[cfg(feature = "ffmpeg")]
 mod packets;
+#[cfg(feature = "ffmpeg")]
 mod remux;
+#[cfg(feature = "ffmpeg")]
 mod verify;
 
 pub use error::{Error, Result};
+#[cfg(feature = "ffmpeg")]
 pub use inspect::{probe, snapshot};
+#[cfg(feature = "ffmpeg")]
 pub use model::{
     ChannelLayout, ChapterRecord, CodecParams, MediaCounts, MediaSnapshot, PacketProof,
     PacketRecord, SideDataKind, SideDataRecord, StreamCounts, StreamMapping, StreamSnapshot,
     TimeBase, VerifyReport, expected_counts,
 };
+#[cfg(feature = "ffmpeg")]
 pub use remux::{RemuxStats, remux};
+#[cfg(feature = "ffmpeg")]
 pub use verify::{
     MUXER_WRITTEN_TAGS, build_stream_map, compare_chapters, compare_codec_params,
     compare_expected_counts, compare_packets, compare_side_data, compare_tags, verify,
