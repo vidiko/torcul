@@ -58,6 +58,9 @@ Install the Rust toolchain declared in [rust-toolchain.toml](rust-toolchain.toml
 FFmpeg development libraries (libavformat, libavcodec, libavutil), the FFmpeg CLI,
 Clang, pkg-config and Python 3, then build:
 
+`torcul-media` enables its `ffmpeg` feature by default; Windows CI builds it
+without that feature and runs the non-Unix I/O tests.
+
 ```sh
 cargo build --locked
 python3 -I tools/fixtures/track_fixtures.py target/fx
