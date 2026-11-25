@@ -34,7 +34,6 @@ path = [
     "docs/**",
     "lua/**",
     ".clang-tidy",
-    ".coderabbit.yaml",
     ".dir-locals.el",
     ".editorconfig",
     ".gitattributes",
