@@ -1,7 +1,7 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "description": [
-    "The fleet preset github>plurano/horistes supplies the defaults: the recommended base, a sign-off on the bot's commits, three days of waiting after a release except for a fix of a known vulnerability, no merge by the bot, and go mod tidy after a Go module update. Add only this repository's own rules here."
+    "The fleet preset github>plurano/horistes supplies the recommended base, sign-off on the bot's commits, no merge by the bot, and go mod tidy after a Go module update. It requires three days of waiting after a release, with no wait for a fix of a known vulnerability. Releases from the family's own organisations and container image digest updates also skip the wait, with forks of outside projects keeping the three days in both cases. Add only this repository's own rules here."
   ],
   "extends": [
     "github>plurano/horistes"
