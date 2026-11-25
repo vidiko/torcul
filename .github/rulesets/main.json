@@ -50,6 +50,9 @@
             "context": "Windows I/O tests"
           },
           {
+            "context": "Docs build"
+          },
+          {
             "context": "REUSE lint"
           }
         ],
