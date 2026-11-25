@@ -108,7 +108,9 @@ jobs:
         run: python3 -I tools/ci/install_ffmpeg.py "$RUNNER_TEMP/ffmpeg-9.0.2"
 
       - name: Set up Rust from rust-toolchain.toml
-        run: rustup show active-toolchain
+        run: |
+          rustup toolchain install
+          rustup show active-toolchain
 
       - name: Verification gate
         run: make verify-all PRAETORCTL="$RUNNER_TEMP/bin/praetorctl"
@@ -158,7 +160,9 @@ jobs:
 
       - name: Set up Rust from rust-toolchain.toml
         shell: bash
-        run: rustup show active-toolchain
+        run: |
+          rustup toolchain install
+          rustup show active-toolchain
 
       - name: Build and run FFmpeg-free library tests
         shell: bash
