@@ -9,7 +9,7 @@ import os
 import pathlib
 import secrets
 import shutil
-import subprocess  # nosec B404  # nosemgrep
+import subprocess  # nosec B404  # FIXTURES argument lists, no shell
 import sys
 import tempfile
 
@@ -157,7 +157,8 @@ def run(args):
     # args are FIXTURES constants of this file; the program is resolved by name and no shell runs, so the
     # bandit and semgrep subprocess audit rules do not apply on this line.
     argv = [exe] + args[1:]
-    subprocess.run(argv, check=True, timeout=FFMPEG_TIMEOUT_S, stdout=subprocess.DEVNULL,  # nosec B603  # nosemgrep
+    # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit  # FIXTURES argument list, no shell
+    subprocess.run(argv, check=True, timeout=FFMPEG_TIMEOUT_S, stdout=subprocess.DEVNULL,  # nosec B603  # FIXTURES argument list, no shell
                    stderr=subprocess.PIPE)
 
 

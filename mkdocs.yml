@@ -1,0 +1,127 @@
+# SPDX-FileCopyrightText: 2026 Lusoris <lusoris@pm.me>
+# SPDX-License-Identifier: EUPL-1.2
+# Adapted from the Praetor MkDocs preset (docs/presets/mkdocs at engine commit
+# 90321b1d069c), EUPL-1.2.
+site_name: "torcul"
+# Operator configuration, not a shipped value: the URL the built site is served
+# from. Set DOCS_SITE_URL at build time (for example
+# https://<owner>.github.io/<repo>/). Unset or empty, the build writes no
+# canonical links, no JSON-LD URLs and an empty sitemap.xml, so Material's
+# navigation.instant, which reads that sitemap, falls back to full page loads.
+site_url: !ENV DOCS_SITE_URL
+site_description: >-
+  Video encoding and lossless track selection for media libraries.
+site_author: "Vidiko"
+repo_url: "https://github.com/vidiko/torcul"
+repo_name: "vidiko/torcul"
+edit_uri: edit/main/docs/
+
+# overrides/main.html reads every identity value from this file: the
+# TechArticle author is site_author (site_name when unset), and the site-wide
+# SoftwareSourceCode block needs repo_url (or source_code.repository) plus
+# source_code.programming_language. Set them to your project. Without
+# programming_language no SoftwareSourceCode block is emitted, and 404.html,
+# which has no page and so no TechArticle, then carries no JSON-LD at all.
+extra:
+  source_code:
+    programming_language: "Rust"
+    license: "https://spdx.org/licenses/EUPL-1.2.html"
+
+theme:
+  name: material
+  custom_dir: docs/overrides
+  language: en
+  palette:
+    - scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.instant.prefetch
+    - navigation.tracking
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+    - content.code.annotate
+
+extra_css:
+  - stylesheets/theme.css
+
+plugins:
+  - search
+  # Page dates from Git history: the JSON-LD dateModified in
+  # docs/overrides/main.html reads this plugin's raw ISO date, so rebuilding a
+  # revision never changes it. On a shallow GitHub Actions clone, strict logs
+  # a warning that `mkdocs build --strict` turns into a failure (the Docs
+  # workflow checks out full history). A page with no commit yet, such as a
+  # local draft, gets the build date.
+  - git-revision-date-localized:
+      type: iso_date
+      fallback_to_build_date: false
+      strict: true
+  # No sitemap plugin: MkDocs core already writes site/sitemap.xml and
+  # sitemap.xml.gz from the nav, and the `mkdocs-sitemap-plugin` this block
+  # used to name does not exist on PyPI, so `pip install -r requirements.txt`
+  # failed and the preset aborted with a config error.
+  # No minify plugin: `mkdocs-minify-plugin` pulls in source-only dependencies
+  # (`csscompressor`, `htmlmin2` and `jsmin`) that cannot be hash-locked with
+  # their build tools under `--only-binary=:all:`, GitHub Pages already serves
+  # gzip, and the theme ships minified CSS and JS.
+
+# Rewrite relative Markdown links that leave docs/ (such as ../../Cargo.toml)
+# to repository blob URLs on main, and warn when a target file does not exist.
+# Warn when a page's front matter is not a YAML mapping: MkDocs drops the
+# parse error and leaves the block in the page body.
+hooks:
+  - docs/hooks/repo_links.py
+  - docs/hooks/front_matter.py
+
+exclude_docs: |
+  /overrides/
+  /hooks/
+  /requirements.in
+  /requirements.txt
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - tables
+  - attr_list
+  - toc:
+      permalink: true
+
+# Warn on broken heading anchors so `mkdocs build --strict` fails on them.
+validation:
+  anchors: warn
+
+# List only pages under docs/ in this preset: `mkdocs build --strict` fails on
+# a nav entry whose file is absent. Add a page file and its nav entry together.
+nav:
+  - Home: index.md
+  - Guides:
+      - Track-policy CLI: guides/track-policy-cli.md
+  - Decisions:
+      - adr/README.md
+      - ADR template: adr/0000-template.md
+      - torcul uses vmafx in process through the libvmafx C ABI: adr/0001-vmafx-integration.md
+      - torcul runs its media pipeline in process from Rust, through libav* and direct SVT-AV1: adr/0002-pipeline-architecture.md
+      - Backend measurements: adr/evidence/0002-backends.md
+      - Interfaces and execution steps: adr/evidence/0002-contracts.md

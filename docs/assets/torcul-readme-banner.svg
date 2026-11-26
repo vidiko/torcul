@@ -1,0 +1,28 @@
+<!--
+SPDX-FileCopyrightText: 2026 Lusoris <lusoris@pm.me>
+SPDX-License-Identifier: EUPL-1.2
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 120" width="1200" height="120" role="img" aria-labelledby="t d">
+  <title id="t">torcul</title>
+  <desc id="d">torcul: video encode service. A screw press illustrates the origin of the name.</desc>
+  <defs>
+    <linearGradient id="accent" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#06b6d4" />
+      <stop offset="100%" stop-color="#8b5cf6" />
+    </linearGradient>
+    <clipPath id="card">
+      <rect x="0" y="0" width="1200" height="120" rx="14" />
+    </clipPath>
+  </defs>
+  <g clip-path="url(#card)">
+    <rect x="0" y="0" width="1200" height="120" rx="14" fill="#0b1020" />
+    <rect x="0" y="0" width="8" height="120" fill="url(#accent)" />
+    <g fill="none" stroke="#3b82f6" stroke-opacity="0.45" stroke-linecap="round" stroke-linejoin="round" stroke-width="3">
+      <path d="M1060 94h100 M1070 92V31h80v61 M1064 31h92 M1090 17h40 M1110 17v45" />
+      <path d="m1104 40 12-5 m-12 13 12-5 m-12 13 12-5 M1086 70v-6h48v6z M1084 78v9h52v-9" />
+    </g>
+    <text x="48" y="74" fill="#e2e8f0" font-family="ui-sans-serif, Segoe UI, Helvetica, Arial, sans-serif" font-size="56" font-weight="700">torcul</text>
+    <text x="330" y="52" fill="#94a3b8" font-family="ui-sans-serif, Segoe UI, Helvetica, Arial, sans-serif" font-size="20">Video encode service</text>
+    <text x="330" y="82" fill="#94a3b8" font-family="ui-sans-serif, Segoe UI, Helvetica, Arial, sans-serif" font-size="20">Lossless track selection for media libraries</text>
+  </g>
+</svg>
