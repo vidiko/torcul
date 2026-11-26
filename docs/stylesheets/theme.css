@@ -1,0 +1,20 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Lusoris <lusoris@pm.me>
+ * SPDX-License-Identifier: EUPL-1.2
+ */
+
+/* README-standard palette until the shared theme tokens arrive. */
+[data-md-color-scheme="default"] {
+  --md-primary-fg-color: #111a35;
+  --md-primary-fg-color--light: #3b82f6;
+  --md-primary-fg-color--dark: #0b1020;
+  --md-accent-fg-color: #0e7490;
+}
+
+[data-md-color-scheme="slate"] {
+  --md-primary-fg-color: #111a35;
+  --md-primary-fg-color--light: #3b82f6;
+  --md-primary-fg-color--dark: #0b1020;
+  --md-accent-fg-color: #06b6d4;
+  --md-typeset-a-color: #60a5fa;
+}

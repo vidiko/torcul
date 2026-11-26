@@ -1,142 +1,114 @@
-# torcul
+<!--
+SPDX-FileCopyrightText: 2026 Lusoris <lusoris@pm.me>
+SPDX-License-Identifier: EUPL-1.2
+-->
+<!-- markdownlint-disable MD013 MD033 MD041 -->
 
-torcul is the video encode service of the Vidiko organisation. It takes one
-video stream from a media file and returns a verified encode of that stream,
-or the verdict that the original should be kept.
+<div align="center">
 
-## The name
+  <img src="docs/assets/torcul-readme-banner.svg" alt="torcul: video encode service and lossless track-policy CLI" height="120" />
 
-- **Meaning**: a press, as in a wine or oil press. Input goes in, a pressed
-  product comes out; here a source video stream goes in and a smaller encode
-  of the same stream comes out.
-- **Origin**: Latin *torcular* (press, wine press), from *torquere* (to
-  twist), shortened to *torcul*.
-- **Pronunciation**: TOR-kul (/ˈtɔr.kʊl/).
+  <!-- 3 security/scorecard -->
+  [![Security policy](https://img.shields.io/badge/Security-Policy-3b82f6?style=for-the-badge&labelColor=111a35)](SECURITY.md)
+  [![CodeRabbit](https://img.shields.io/badge/Reviews-CodeRabbit-8b5cf6?style=for-the-badge&labelColor=111a35&logo=coderabbit&logoColor=white)](https://coderabbit.ai)
+  [![Sourcery](https://img.shields.io/badge/Reviews-Sourcery-8b5cf6?style=for-the-badge&labelColor=111a35)](https://sourcery.ai)
+  <!-- 4 standards -->
+  [![HISS-21](https://img.shields.io/badge/Standards-HISS--21-06b6d4?style=for-the-badge&labelColor=111a35&logo=nasa)](AGENTS.md)
+  [![REUSE](https://img.shields.io/badge/Licensing-REUSE-06b6d4?style=for-the-badge&labelColor=111a35)](REUSE.toml)
+  [![Conventional Commits](https://img.shields.io/badge/Commits-Conventional-8b5cf6?style=for-the-badge&labelColor=111a35&logo=conventionalcommits&logoColor=white)](CONTRIBUTING.md)
+  <!-- 5 licence -->
+  [![License](https://img.shields.io/badge/License-EUPL--1.2-3b82f6?style=for-the-badge&labelColor=111a35)](LICENSE)
+  <!-- 6 support -->
+  [![GitHub Sponsors](https://img.shields.io/badge/Sponsor-GitHub-8b5cf6?style=for-the-badge&labelColor=111a35&logo=githubsponsors&logoColor=white)](https://github.com/sponsors/lusoris)
+  [![Ko-fi](https://img.shields.io/badge/Support-Ko--fi-8b5cf6?style=for-the-badge&labelColor=111a35&logo=kofi&logoColor=white)](https://ko-fi.com/lusoris)
 
-## What it does
+  **Video encoding and lossless track selection for media libraries.**
 
-- One video stream in (a media file plus a stream index), one video-only
-  file plus a provenance record out.
-- Auto mode first: torcul picks the codec, the encoder and the rate control
-  from a quality target and a size budget, and keeps the original when no
-  encode meets both.
-- Hardware encoders are probed with a test encode; remux, CPU encode and GPU
-  encode run in bounded pools.
-- Geometry (crop, aspect ratio, frame rate, deinterlace) and HDR metadata
-  (HDR10, HDR10+, Dolby Vision) are carried through.
+</div>
 
-The encode job contract started as ADR-3378 in
-[VMAFx/vmafx](https://github.com/VMAFx/vmafx) and moved here on 2026-10-27.
-The work items are tracked as issues in this repository.
+torcul is Vidiko’s video encode service. Its planned job takes one source stream and returns a verified encode or a verdict to keep the original. Today the [Rust CLI](crates/torcul-cli/src/args.rs) plans track selection, remuxes into staging and verifies the copy.
 
-## Quality: torcul uses VMAFx
+Pronounce *torcul* **TOR-kul** (/ˈtɔr.kʊl/). The name shortens Latin *torcular*, a wine or oil press, from *torquere*, “to twist”. Like the press, the encode service takes an input and aims to produce a smaller version of the same video stream. More in [the name section](docs/index.md#the-name) of the documentation home.
 
-torcul does not measure quality itself. It connects to
-[VMAFx](https://github.com/VMAFx/vmafx), the perceptual video quality library
-and toolkit, for:
+**[📖 Documentation](https://vidiko.github.io/torcul/)** · [Documentation source](docs/)
 
-- **scoring**: VMAF scores of each candidate encode against its source;
-- **`vmaf-tune auto`**: the quality search that picks encoder settings for a
-  target score;
-- **compare**: codec and encoder comparison on the same source.
+---
 
-How torcul binds VMAFx (in-process over the `libvmafx` C interface, through
-Rust crates) is recorded in
-[ADR-0001](docs/adr/0001-vmafx-integration.md).
+## 🎯 Why torcul
 
-## Status
+| Aspect | How torcul handles it |
+| :--- | :--- |
+| Track selection | Preview which audio and subtitle tracks to keep. The policy accounts for the original language and retains tracks of undetermined language with a warning. [Track policy](crates/torcul-policy/src/lib.rs) |
+| Library originals | Library files stay untouched until the language-check and apply slice lands. The CLI copies selected tracks into staging. The verifier checks packet payloads, timing and metadata against the source before recording the verdict. [Verification](crates/torcul-media/src/verify.rs) · [Staging record](crates/torcul-cli/src/staging.rs) |
+| Encode quality (planned) | Auto mode will choose a codec, encoder and rate control against a quality target and size budget. If no candidate meets both, torcul keeps the original. [Encode job design](docs/adr/0001-vmafx-integration.md) |
+| Encoder workload (planned) | A test encode will check hardware availability. Remux, CPU encode and GPU encode will run in bounded pools. The encode plan accounts for geometry and HDR metadata. [Service design](docs/adr/0001-vmafx-integration.md) · [Pipeline](docs/adr/0002-pipeline-architecture.md) |
 
-The Rust workspace implements the first track-policy remux slice
-([ADR-0002](docs/adr/0002-pipeline-architecture.md) decision 17): dry-run
-planning, stream copy into staging, and lossless verification. Library files
-remain untouched until the language-check and apply slice lands. Encoding
-services described above remain planned; this slice never re-encodes.
+## 🚀 Get started
 
-### Track-policy CLI
-
-Install the Rust toolchain declared in [rust-toolchain.toml](rust-toolchain.toml),
-FFmpeg development libraries (libavformat, libavcodec, libavutil), the FFmpeg CLI,
-Clang, pkg-config and Python 3, then build:
-
-`torcul-media` enables its `ffmpeg` feature by default; Windows CI builds it
-without that feature and runs the non-Unix I/O tests.
+On Unix, install the [pinned Rust toolchain](rust-toolchain.toml), Clang, pkg-config and the FFmpeg development libraries (libavformat, libavcodec and libavutil). The [sample media generator](tools/fixtures/track_fixtures.py) needs Python 3 and the FFmpeg CLI with libx264. From the repository root, preview the track policy on the samples:
 
 ```sh
 cargo build --locked
 python3 -I tools/fixtures/track_fixtures.py target/fx
-target/debug/torcul plan --meta target/fx/manifest.json --json target/plan.json target/fx
-target/debug/torcul remux --meta target/fx/manifest.json --staging target/staging target/fx/f07_default_dropped.mkv
-target/debug/torcul verify --staging target/staging target/fx/f07_default_dropped.mkv
+target/debug/torcul plan --meta target/fx/manifest.json \
+  --json target/plan.json target/fx
 ```
 
-Metadata is JSON with a `fixtures` array: each entry needs `name` (basename),
-`original` (ISO 639 language code or null), and `anime` (boolean). Extra keys
-are ignored. Missing entries or invalid ISO 639 `original` codes produce
-per-file errors and a nonzero exit status. Planning a directory scans its direct
-children with recognized media extensions; it does not descend into directories.
-Tracks dropped by the policy carry `"lid": "pending"` (`drop (pending LID)` in
-the human table) until the language-check stage exists.
+The table shows the stream indices to keep or drop for each file. To stage and verify one of them, follow the [track-policy CLI guide](docs/guides/track-policy-cli.md).
 
-The policy keeps English/German audio, original audio when neither is present,
-and all three for anime (retaining every audio track with a warning when anime
-original language is null). Unknown-language audio/subtitles remain with
-warnings; no matching audio falls back to retaining all audio. English/German
-subtitles remain in every variant. Video, cover art, attachments, chapters and
-global metadata remain. See [policy implementation](crates/torcul-policy/src/lib.rs)
-and [fixture oracle](tools/fixtures/track_fixtures.py).
+## 🧩 At a glance
 
-Matroska and MP4 remuxes copy packets and codec parameters; remux never encodes.
-Verification ([ADR-0002](docs/adr/0002-pipeline-architecture.md) decisions 4
-and 13) maps source streams explicitly to staged streams and compares per-kind
-stream counts, chapter counts and exact rational chapter timestamps, attachment
-counts and payloads, per-packet payload size, key flag, timestamps (`pts`,
-`dts`, `duration` within one tick of the coarser stream time base), payload
-SHA-256, codec parameters with extradata, decode/display side data, and
-bidirectional tag maps (allowing muxer-written Matroska tags; see
-[verification](crates/torcul-media/src/verify.rs)).
-Some fragmented MP4 subtitle layouts change packet framing in FFmpeg's muxer;
-verification refuses those outputs. Original encoder tags remain. MP4 preserves
-opaque movie/track metadata boxes with
-[mp4-atom](https://docs.rs/mp4-atom/0.17.1/mp4_atom/); file-type changes adjust
-sample chunk offsets without changing packet bytes. Metadata boxes have a
-64 MiB bound; larger boxes fail with an error. Language normalization uses
-[rust_iso639](https://docs.rs/rust_iso639/0.1.0/rust_iso639/), and media I/O
-uses [ffmpeg-next](https://docs.rs/ffmpeg-next/9.1.0/ffmpeg_next/).
+The CLI reads stream indices from the media file. When the plan calls for a remux, it copies the selected streams into staging. Verification records the result beside the staged file. [ADR-0002, first slice](docs/adr/0002-pipeline-architecture.md#decision-17-first-slice)
 
-Staging writes `<name>.torcul.json` beside the staged file with the plan and
-the source fingerprint (`dev`, `ino`, `size`, `mtime_ns`, and whole-file
-`sha256:<hex>` verified by matching `fstat` before and after hashing). Sources
-with multiple hard links and staging directories on a different filesystem
-device are refused. Verification records its verdict and the full fingerprint
-of the staged output there. Only files needing remux create staging output.
-Existing staging files are refused. Input paths must be regular local files
-with UTF-8 names; symlinks/devices/FIFOs are refused.
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {'fontFamily': 'ui-sans-serif, Segoe UI, Helvetica, Arial, sans-serif', 'fontSize': '15px', 'primaryColor': '#111a35', 'primaryTextColor': '#e2e8f0', 'primaryBorderColor': '#3b82f6', 'lineColor': '#3b82f6', 'edgeLabelBackground': '#111a35', 'tertiaryColor': '#0b1020'}}}%%
+flowchart TD
+  classDef input fill:#0b1020,stroke:#06b6d4,stroke-width:2px,color:#e2e8f0
+  classDef step fill:#111a35,stroke:#3b82f6,stroke-width:2px,color:#e2e8f0
+  classDef decide fill:#111a35,stroke:#8b5cf6,stroke-width:2px,color:#e2e8f0
 
-FFmpeg reads use interrupt deadlines; packet loops also have a scalar limit.
-Local file operations check deadlines around syscalls, but a kernel stall
-inside a regular-file syscall cannot be cancelled portably. No concurrent
-writer should modify sources, staging, or sidecars during these commands.
+  source["Media file + stream index"]:::input
+  plan["Track-policy plan"]:::step
+  remux["Remux into staging"]:::step
+  verify{"Lossless verification"}:::decide
+  output["Staged file +<br/>.torcul.json sidecar"]:::input
 
-## Development
-
-```sh
-make verify-all
+  source --> plan
+  plan -->|Remux needed| remux
+  remux --> verify
+  verify -->|Pass| output
 ```
 
-runs the same gate as CI. Contribution rules are in
-[CONTRIBUTING.md](CONTRIBUTING.md), agent rules in [AGENTS.md](AGENTS.md),
-security reports in [SECURITY.md](SECURITY.md).
+## 📚 Guides and reference
 
-## Licence
+- [Track-policy CLI](docs/guides/track-policy-cli.md) explains the metadata format, language rules, staging and verification.
+- [Decision index](docs/adr/README.md) lists the accepted records and their status.
+- [ADR-0001](docs/adr/0001-vmafx-integration.md) explains the choice of the VMAFx C interface for scoring.
+- [ADR-0002](docs/adr/0002-pipeline-architecture.md) describes the media pipeline and the conditions for replacing a library file.
 
-torcul is licensed under the European Union Public Licence 1.2
-([LICENSE](LICENSE)). Licence and copyright information for every file
-follows the [REUSE](https://reuse.software) specification
-([REUSE.toml](REUSE.toml), [LICENSES/](LICENSES/)).
+## 🤝 Contribute
+
+Run `make verify-all` before submitting a change. The [contributor guide](CONTRIBUTING.md) covers tests and commit format. [AGENTS.md](AGENTS.md) defines repository standards. Report vulnerabilities privately through the [security policy](SECURITY.md).
+
+## 💖 Support
+
+Support torcul through [GitHub Sponsors](https://github.com/sponsors/lusoris) or [Ko-fi](https://ko-fi.com/lusoris).
+
+## 📈 Roadmap and releases
+
+torcul has no release yet. Follow [open issues](https://github.com/vidiko/torcul/issues) or browse work in the [0.1.0 milestone](https://github.com/vidiko/torcul/issues?q=milestone%3A0.1.0).
+
+## Upstream and licence
+
+The encode job contract began in ADR-3378 in [VMAFx](https://github.com/VMAFx/vmafx). torcul owns the service. Its planned integration calls the `libvmafx` C interface in process from Rust to score each candidate against the source, choose settings for a target score with `vmaf-tune auto`, and compare codecs and encoders. [ADR-0001](docs/adr/0001-vmafx-integration.md)
+
+torcul uses the [European Union Public Licence 1.2](LICENSE). Per-file copyright and licence notices follow [REUSE](https://reuse.software). [REUSE configuration](REUSE.toml) · [Licence texts](LICENSES/)
+
+## Standards and governance
+
+torcul declares the High-Integrity Systems Standard (HISS-21) in [AGENTS.md](AGENTS.md). The `make verify-all` target in the [Makefile](Makefile) is the repository gate.
 
 <!-- praetor:readme-governance:start -->
-[![HISS Adopted][praetor-hiss-badge]][praetor-hiss-agents]
-
 Praetor manages this repository's declared governance policy. This managed
 block records adoption state; it is not a verification certificate.
 
@@ -151,7 +123,4 @@ generated agent context against `AGENTS.md`.
 
 **Debt Baseline**: `.standards-baseline.json` anchors the debt ratchet at
 0 recorded infractions; audit forbids growth.
-
-[praetor-hiss-badge]: https://img.shields.io/badge/Standards-HISS%20Adopted-blue
-[praetor-hiss-agents]: https://github.com/vidiko/torcul/blob/HEAD/AGENTS.md
 <!-- praetor:readme-governance:end -->

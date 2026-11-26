@@ -6,6 +6,9 @@
 engines:
   # Exception: file Cargo.lock, rule Lizard_file-nloc-medium, reason: Cargo writes the lockfile and Lizard
   # measures it as code; category D, entered 2026-11-24, expires 2027-03-24.
+  # Exception: file docs/requirements.txt, rule Lizard_file-nloc-medium, reason: uv pip compile writes the
+  # hashed docs lockfile and Lizard measures it as code; category D, entered 2026-11-26, expires 2027-03-26.
   lizard:
     exclude_paths:
       - "Cargo.lock"
+      - "docs/requirements.txt"
