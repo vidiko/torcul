@@ -157,7 +157,7 @@ def run(args):
     # args are FIXTURES constants of this file; the program is resolved by name and no shell runs, so the
     # bandit and semgrep subprocess audit rules do not apply on this line.
     argv = [exe] + args[1:]
-    # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit  # FIXTURES argument list, no shell
+    # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit, python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args  # FIXTURES argument list; only the output directory from the command line joins it as a path; no shell
     subprocess.run(argv, check=True, timeout=FFMPEG_TIMEOUT_S, stdout=subprocess.DEVNULL,  # nosec B603  # FIXTURES argument list, no shell
                    stderr=subprocess.PIPE)
 

@@ -64,7 +64,7 @@ def run_tool(args, *, check, timeout, **kwargs):
     """Run one argument list through tool(); every caller passes a timeout (HISS-02)."""
     # The list comes from constants of this file and its own paths; tool() resolves the program by name and
     # no shell runs, so the bandit and semgrep subprocess audit rules do not apply on this line.
-    # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit  # argument list from this file, no shell
+    # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit, python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args  # argument list from this file; only the work directory from the command line joins it as a path; no shell
     return subprocess.run(tool(args), check=check, timeout=timeout, **kwargs)  # nosec B603  # argument list from this file, no shell
 
 
@@ -90,7 +90,7 @@ def measure(args, stdout_path=None):
         argv = tool(["taskset", "-c", CPUS] + tool(args))
         start = time.monotonic()
         # argv is a case list from this file, resolved by tool(); no shell (see run_tool).
-        # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit  # case list from this file, no shell
+        # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit, python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args  # case list from this file; only the work directory from the command line joins it as a path; no shell
         child = subprocess.Popen(argv, stdout=sink, stderr=err_file, start_new_session=True)  # nosec B603  # case list from this file, no shell
         pid = 0
         try:
