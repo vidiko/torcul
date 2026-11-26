@@ -131,6 +131,67 @@
       ]
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "enum": [
+              "applying",
+              "rolling_back"
+            ]
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "properties": {
+          "source_fingerprint": {
+            "not": {
+              "type": "null"
+            }
+          },
+          "staged_fingerprint": {
+            "not": {
+              "type": "null"
+            }
+          }
+        },
+        "required": [
+          "source_fingerprint",
+          "staged_fingerprint"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "enum": [
+              "rolling_back"
+            ]
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "properties": {
+          "rollback_path": {
+            "not": {
+              "type": "null"
+            }
+          }
+        },
+        "required": [
+          "rollback_path"
+        ]
+      }
+    }
+  ],
   "required": [
     "schema",
     "id",
@@ -187,11 +248,13 @@
         "dev": {
           "type": "integer",
           "format": "uint64",
+          "maximum": 18446744073709551615,
           "minimum": 0
         },
         "ino": {
           "type": "integer",
           "format": "uint64",
+          "maximum": 18446744073709551615,
           "minimum": 0
         },
         "mtime_ns": {
@@ -206,6 +269,7 @@
         "size": {
           "type": "integer",
           "format": "uint64",
+          "maximum": 18446744073709551615,
           "minimum": 0
         }
       },
@@ -228,6 +292,7 @@
             "null"
           ],
           "format": "uint64",
+          "maximum": 18446744073709551615,
           "minimum": 0
         },
         "staging": {
@@ -237,6 +302,7 @@
             "null"
           ],
           "format": "uint64",
+          "maximum": 18446744073709551615,
           "minimum": 0
         }
       }
@@ -275,7 +341,7 @@
         },
         "title": {
           "description": "Title facts needed by the policy planner (original language and anime flag).",
-          "$ref": "#/$defs/TitleMeta"
+          "$ref": "#/$defs/RequestTitle"
         }
       },
       "additionalProperties": false,
@@ -398,11 +464,13 @@
         "bytes": {
           "type": "integer",
           "format": "uint64",
+          "maximum": 18446744073709551615,
           "minimum": 0
         },
         "count": {
           "type": "integer",
           "format": "uint64",
+          "maximum": 18446744073709551615,
           "minimum": 0
         },
         "sha256": {
@@ -465,6 +533,27 @@
       "type": "string",
       "enum": [
         "torcul/job-request/1"
+      ]
+    },
+    "RequestTitle": {
+      "description": "Title facts the caller resolves for the policy planner; unknown fields are refused.",
+      "type": "object",
+      "properties": {
+        "anime": {
+          "description": "Whether the title is anime.",
+          "type": "boolean"
+        },
+        "original": {
+          "description": "ISO 639 code of the title's original language, if known.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "anime"
       ]
     },
     "Rule": {
@@ -546,23 +635,6 @@
         "source",
         "staging",
         "attached_pic"
-      ]
-    },
-    "TitleMeta": {
-      "type": "object",
-      "properties": {
-        "anime": {
-          "type": "boolean"
-        },
-        "original": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "anime"
       ]
     },
     "TrackDecision": {
@@ -654,7 +726,7 @@
       "type": "object",
       "properties": {
         "languages": {
-          "description": "ISO 639 language codes to keep.",
+          "description": "ISO 639 language codes to keep; at least one.",
           "type": "array",
           "items": {
             "type": "string"
@@ -675,7 +747,8 @@
         "at": {
           "description": "RFC 3339 UTC timestamp when the state was recorded.",
           "type": "string",
-          "format": "date-time"
+          "format": "date-time",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
         },
         "state": {
           "description": "State entered by this transition.",

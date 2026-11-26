@@ -234,10 +234,12 @@ fn cli_remux_sidecar_preserves_pending_lid_and_staging_fingerprint() {
 fn cli_verify_rejects_unsupported_sidecar_version() {
     let (_tmp, src, staging) = prepared("f07_default_dropped.mkv");
     let sidecar = staging.join("f07_default_dropped.mkv.torcul.json");
-    let mut record: serde_json::Value =
-        serde_json::from_slice(&fs::read(&sidecar).unwrap()).unwrap();
+    let deadline = Deadline::new();
+    let bytes = deadline.run(|| fs::read(&sidecar)).unwrap();
+    let mut record: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     record["version"] = serde_json::json!(2);
-    fs::write(&sidecar, serde_json::to_vec_pretty(&record).unwrap()).unwrap();
+    let bytes = serde_json::to_vec_pretty(&record).unwrap();
+    deadline.run(|| fs::write(&sidecar, &bytes)).unwrap();
 
     let out = command("verify", None, Some(&staging), &src);
     assert!(!out.success);

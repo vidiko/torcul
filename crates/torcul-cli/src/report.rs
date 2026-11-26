@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: EUPL-1.2
 use crate::files;
 use anyhow::{Context, Result, bail};
-use schemars::JsonSchema;
+use schemars::{JsonSchema, Schema};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::{
     collections::BTreeMap,
     io::Write,
@@ -46,7 +47,20 @@ pub fn title<'a>(path: &Path, meta: &'a Metadata) -> Result<&'a TitleMeta> {
         .with_context(|| format!("no metadata entry for {name}"))
 }
 
+/// Each entry carries exactly one outcome: a plan with `error: null`, or an error with
+/// `plan: null`. Both keys are always written.
+fn one_outcome(schema: &mut Schema) {
+    let is_set = json!({ "not": { "type": "null" } });
+    let is_null = json!({ "type": "null" });
+    let branches = json!([
+        { "properties": { "plan": is_set, "error": is_null }, "required": ["plan", "error"] },
+        { "properties": { "plan": is_null, "error": is_set }, "required": ["plan", "error"] },
+    ]);
+    schema.insert("oneOf".to_owned(), branches);
+}
+
 #[derive(Serialize, JsonSchema)]
+#[schemars(transform = one_outcome)]
 pub struct FileReport {
     pub path: PathBuf,
     pub plan: Option<Plan>,

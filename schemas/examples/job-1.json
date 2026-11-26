@@ -38,8 +38,13 @@
       "torcul_version": "0.1.0"
     },
     {
-      "state": "applied",
+      "state": "applying",
       "at": "2026-11-26T17:00:07Z",
+      "torcul_version": "0.1.0"
+    },
+    {
+      "state": "applied",
+      "at": "2026-11-26T17:00:08Z",
       "torcul_version": "0.1.0"
     }
   ],

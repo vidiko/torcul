@@ -9,7 +9,7 @@ use std::{
     process::{Command, Stdio},
     time::Duration,
 };
-use torcul_job::{Job, JobRequest};
+use torcul_job::{Job, JobRequest, JobState};
 use torcul_media::io::Deadline;
 use wait_timeout::ChildExt;
 
@@ -24,13 +24,17 @@ fn read_json_file(path: &Path) -> Value {
     serde_json::from_slice(&bytes).unwrap()
 }
 
-fn validator_for(name: &str) -> Validator {
+fn validator_with_formats(name: &str, formats: bool) -> Validator {
     let schema = read_json_file(&schemas_dir().join(name));
     jsonschema::draft202012::options()
-        .should_validate_formats(true)
+        .should_validate_formats(formats)
         .offline()
         .build(&schema)
         .unwrap_or_else(|e| panic!("build validator for {name}: {e}"))
+}
+
+fn validator_for(name: &str) -> Validator {
+    validator_with_formats(name, true)
 }
 
 fn run_schema_subcommand(out: &Path) {
@@ -170,7 +174,18 @@ fn example_documents_validate_and_round_trip() {
         job_validator.iter_errors(&job_val).into_errors()
     );
     let job: Job = serde_json::from_value(job_val.clone()).unwrap();
-    assert_eq!(job.history.len(), 4);
+    let states: Vec<JobState> = job.history.iter().map(|t| t.state).collect();
+    assert_eq!(
+        states,
+        [
+            JobState::Planned,
+            JobState::Staged,
+            JobState::Verified,
+            JobState::Applying,
+            JobState::Applied,
+        ]
+    );
+    assert_eq!(job.state, JobState::Applied);
     assert_eq!(serde_json::to_value(&job).unwrap(), job_val);
 }
 
@@ -259,10 +274,118 @@ fn request_boundaries_and_unknown_fields() {
     unknown_top["extra_field"] = json!(true);
     assert!(!req_validator.is_valid(&unknown_top));
     assert!(serde_json::from_value::<JobRequest>(unknown_top).is_err());
+}
 
-    let mut empty_langs = base;
+#[test]
+fn request_title_and_languages_boundaries() {
+    let req_validator = validator_for("job-request-1.schema.json");
+    let base = read_json_file(&schemas_dir().join("examples/job-request-1.json"));
+
+    let mut one_lang = base.clone();
+    one_lang["rule"]["track"]["languages"] = json!(["eng"]);
+    assert!(req_validator.is_valid(&one_lang));
+    let parsed: JobRequest = serde_json::from_value(one_lang).unwrap();
+    assert_eq!(parsed.rule.track.languages.len(), 1);
+
+    let mut empty_langs = base.clone();
     empty_langs["rule"]["track"]["languages"] = json!([]);
     assert!(!req_validator.is_valid(&empty_langs));
+    let err = serde_json::from_value::<JobRequest>(empty_langs).unwrap_err();
+    assert!(
+        err.to_string().contains("at least one language code"),
+        "{err}"
+    );
+
+    let mut title_only_anime = base.clone();
+    title_only_anime["title"] = json!({ "anime": true });
+    assert!(req_validator.is_valid(&title_only_anime));
+    let parsed: JobRequest = serde_json::from_value(title_only_anime).unwrap();
+    assert!(parsed.title.anime && parsed.title.original.is_none());
+
+    let mut title_extra = base;
+    title_extra["title"]["year"] = json!(1999);
+    assert!(!req_validator.is_valid(&title_extra));
+    assert!(serde_json::from_value::<JobRequest>(title_extra).is_err());
+}
+
+#[test]
+fn plan_report_entries_carry_exactly_one_outcome() {
+    let validator = validator_for("plan-report.schema.json");
+    let plan = read_json_file(&schemas_dir().join("examples/job-1.json"))["plan"].clone();
+    let path = "/srv/media/movies/Example.mkv";
+    let cases = [
+        (json!({ "path": path, "plan": plan, "error": null }), true),
+        (
+            json!({ "path": path, "plan": null, "error": "probe failed" }),
+            true,
+        ),
+        (json!({ "path": path, "plan": null, "error": null }), false),
+        (
+            json!({ "path": path, "plan": plan, "error": "probe failed" }),
+            false,
+        ),
+        (json!({ "path": path, "plan": plan }), false),
+    ];
+    for (entry, valid) in cases {
+        let report = json!([entry]);
+        assert_eq!(validator.is_valid(&report), valid, "{report}");
+    }
+    assert!(validator.is_valid(&json!([])));
+}
+
+#[test]
+fn restart_states_require_fingerprints_and_rollback_path() {
+    let validator = validator_for("job-1.schema.json");
+    let base = read_json_file(&schemas_dir().join("examples/job-1.json"));
+    let with = |state: &str, edit: &dyn Fn(&mut Value)| {
+        let mut doc = base.clone();
+        doc["state"] = json!(state);
+        edit(&mut doc);
+        validator.is_valid(&doc)
+    };
+    let keep = |_: &mut Value| {};
+    let null_source = |d: &mut Value| d["source_fingerprint"] = Value::Null;
+    let drop_staged = |d: &mut Value| {
+        d.as_object_mut().unwrap().remove("staged_fingerprint");
+    };
+    let set_rollback = |d: &mut Value| d["rollback_path"] = json!("/srv/media/movies/Example.mkv");
+
+    assert!(with("applying", &keep));
+    assert!(!with("applying", &null_source));
+    assert!(!with("applying", &drop_staged));
+    assert!(!with("rolling_back", &keep));
+    assert!(with("rolling_back", &set_rollback));
+    assert!(!with("rolling_back", &|d| {
+        set_rollback(d);
+        null_source(d);
+    }));
+    assert!(with("planned", &|d| {
+        null_source(d);
+        drop_staged(d);
+    }));
+}
+
+#[test]
+fn unsigned_fields_carry_exact_maximum() {
+    let job_validator = validator_for("job-1.schema.json");
+    let record_validator = validator_for("staging-record-1.schema.json");
+    let max = json!(u64::MAX);
+    let over: Value = serde_json::from_str("18446744073709551616").unwrap();
+
+    let mut job = read_json_file(&schemas_dir().join("examples/job-1.json"));
+    job["source_fingerprint"]["size"] = max.clone();
+    assert!(job_validator.is_valid(&job));
+    let parsed: Job = serde_json::from_value(job.clone()).unwrap();
+    assert_eq!(parsed.source_fingerprint.unwrap().size, u64::MAX);
+    job["source_fingerprint"]["size"] = over.clone();
+    assert!(!job_validator.is_valid(&job));
+    assert!(serde_json::from_value::<Job>(job).is_err());
+
+    let mut record = sample_staging_record();
+    record["fingerprint"]["size"] = max;
+    assert!(record_validator.is_valid(&record));
+    record["fingerprint"]["size"] = over;
+    assert!(!record_validator.is_valid(&record));
 }
 
 #[test]
@@ -284,9 +407,18 @@ fn job_id_timestamp_and_fingerprint_boundaries() {
         assert!(!job_validator.is_valid(&doc), "expected bad id: {bad_id}");
     }
 
+    let shape_only = validator_with_formats("job-1.schema.json", false);
     let mut bad_time = base.clone();
     bad_time["history"][0]["at"] = json!("yesterday");
     assert!(!job_validator.is_valid(&bad_time));
+    assert!(!shape_only.is_valid(&bad_time));
+    let mut month_13 = base.clone();
+    month_13["history"][0]["at"] = json!("2026-13-01T00:00:00Z");
+    assert!(shape_only.is_valid(&month_13));
+    assert!(!job_validator.is_valid(&month_13));
+    let mut fractional = base.clone();
+    fractional["history"][0]["at"] = json!("2026-11-26T17:00:00.123Z");
+    assert!(shape_only.is_valid(&fractional) && job_validator.is_valid(&fractional));
 
     let mut bad_fp = base;
     bad_fp["source_fingerprint"]["sha256"] = json!("sha256:short");

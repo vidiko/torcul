@@ -29,6 +29,40 @@
           ]
         }
       },
+      "oneOf": [
+        {
+          "properties": {
+            "error": {
+              "type": "null"
+            },
+            "plan": {
+              "not": {
+                "type": "null"
+              }
+            }
+          },
+          "required": [
+            "plan",
+            "error"
+          ]
+        },
+        {
+          "properties": {
+            "error": {
+              "not": {
+                "type": "null"
+              }
+            },
+            "plan": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "plan",
+            "error"
+          ]
+        }
+      ],
       "required": [
         "path"
       ]

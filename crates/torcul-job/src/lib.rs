@@ -6,14 +6,26 @@
 //! the durable `job.json` state record owned by `torcul` (ADR-0002 decisions 9 to 15). This crate
 //! performs no I/O and contains no execution runner.
 
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use schemars::{JsonSchema, Schema};
+use serde::{Deserialize, Deserializer, Serialize, de};
+use serde_json::{Map, Value, json};
 use std::{collections::BTreeSet, path::PathBuf};
 use torcul_media::{VerifyReport, io::Fingerprint};
 use torcul_policy::{FileFacts, Plan, TitleMeta};
 
 const fn default_rollback_days() -> u16 {
     7
+}
+
+/// RFC 3339 UTC timestamp shape, checked without opt-in format validation.
+const UTC_TIMESTAMP: &str = r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z$";
+
+fn non_empty_languages<'de, D: Deserializer<'de>>(input: D) -> Result<BTreeSet<String>, D::Error> {
+    let languages = BTreeSet::<String>::deserialize(input)?;
+    if languages.is_empty() {
+        return Err(de::Error::invalid_length(0, &"at least one language code"));
+    }
+    Ok(languages)
 }
 
 /// Schema identifier for a version 1 job request (`"torcul/job-request/1"`).
@@ -43,7 +55,8 @@ pub enum Mode {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TrackRule {
-    /// ISO 639 language codes to keep.
+    /// ISO 639 language codes to keep; at least one.
+    #[serde(deserialize_with = "non_empty_languages")]
     #[schemars(length(min = 1))]
     pub languages: BTreeSet<String>,
 }
@@ -54,6 +67,25 @@ pub struct TrackRule {
 pub struct Rule {
     /// Track-selection policy parameters.
     pub track: TrackRule,
+}
+
+/// Title facts the caller resolves for the policy planner; unknown fields are refused.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RequestTitle {
+    /// ISO 639 code of the title's original language, if known.
+    pub original: Option<String>,
+    /// Whether the title is anime.
+    pub anime: bool,
+}
+
+impl From<RequestTitle> for TitleMeta {
+    fn from(title: RequestTitle) -> Self {
+        Self {
+            original: title.original,
+            anime: title.anime,
+        }
+    }
 }
 
 /// Job request contract (`torcul/job-request/1`) written by a caller to trigger `torcul`.
@@ -69,7 +101,7 @@ pub struct JobRequest {
     /// Effective rule resolved by the caller.
     pub rule: Rule,
     /// Title facts needed by the policy planner (original language and anime flag).
-    pub title: TitleMeta,
+    pub title: RequestTitle,
     /// Staging root directory on the same filesystem device as `source`.
     pub staging_root: PathBuf,
     /// Days to retain the swapped-out original as a rollback copy; defaults to 7.
@@ -127,6 +159,7 @@ pub struct Transition {
     pub state: JobState,
     /// RFC 3339 UTC timestamp when the state was recorded.
     #[schemars(extend("format" = "date-time"))]
+    #[schemars(regex(pattern = UTC_TIMESTAMP))]
     pub at: String,
     /// Version of `torcul` that wrote this transition.
     pub torcul_version: String,
@@ -150,8 +183,34 @@ pub struct HeldInodes {
     pub staging: Option<u64>,
 }
 
+/// Requires non-null `fields` whenever the job's state is one of `states`.
+fn require_when(states: &[&str], fields: &[&str]) -> Value {
+    let not_null: Map<String, Value> = fields
+        .iter()
+        .map(|field| ((*field).to_owned(), json!({ "not": { "type": "null" } })))
+        .collect();
+    json!({
+        "if": { "properties": { "state": { "enum": states } }, "required": ["state"] },
+        "then": { "properties": not_null, "required": fields },
+    })
+}
+
+/// A restart in `applying` or `rolling_back` reads both inodes from the fingerprints, and in
+/// `rolling_back` the library path from `rollback_path` (ADR-0002 decision 15).
+fn require_restart_fields(schema: &mut Schema) {
+    let rules = json!([
+        require_when(
+            &["applying", "rolling_back"],
+            &["source_fingerprint", "staged_fingerprint"],
+        ),
+        require_when(&["rolling_back"], &["rollback_path"]),
+    ]);
+    schema.insert("allOf".to_owned(), rules);
+}
+
 /// Durable job state record (`torcul/job/1`) written atomically to `<staging_root>/<id>/job.json`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[schemars(transform = require_restart_fields)]
 pub struct Job {
     /// Contract identifier (`"torcul/job/1"`).
     pub schema: JobSchema,
@@ -221,6 +280,21 @@ mod tests {
         let mut extra = raw;
         extra["unexpected"] = json!(1);
         assert!(serde_json::from_value::<JobRequest>(extra).is_err());
+    }
+
+    #[test]
+    fn request_title_converts_to_planner_metadata() {
+        let title = RequestTitle {
+            original: Some("jpn".to_owned()),
+            anime: true,
+        };
+        let meta = TitleMeta::from(title);
+        assert_eq!(meta.original.as_deref(), Some("jpn"));
+        assert!(meta.anime);
+        assert_eq!(
+            TitleMeta::from(RequestTitle::default()),
+            TitleMeta::default()
+        );
     }
 
     #[test]
