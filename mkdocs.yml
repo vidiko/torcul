@@ -118,6 +118,8 @@ nav:
   - Home: index.md
   - Guides:
       - Track-policy CLI: guides/track-policy-cli.md
+  - Reference:
+      - JSON Schemas: reference/json-schemas.md
   - Decisions:
       - adr/README.md
       - ADR template: adr/0000-template.md

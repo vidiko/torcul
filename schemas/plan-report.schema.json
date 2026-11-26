@@ -1,0 +1,143 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "torcul/plan-report",
+  "type": "array",
+  "items": {
+    "$ref": "#/$defs/FileReport"
+  },
+  "$defs": {
+    "FileReport": {
+      "type": "object",
+      "properties": {
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "type": "string"
+        },
+        "plan": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Plan"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "error": {
+              "type": "null"
+            },
+            "plan": {
+              "not": {
+                "type": "null"
+              }
+            }
+          },
+          "required": [
+            "plan",
+            "error"
+          ]
+        },
+        {
+          "properties": {
+            "error": {
+              "not": {
+                "type": "null"
+              }
+            },
+            "plan": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "plan",
+            "error"
+          ]
+        }
+      ],
+      "required": [
+        "path"
+      ]
+    },
+    "Plan": {
+      "type": "object",
+      "properties": {
+        "decisions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TrackDecision"
+          }
+        },
+        "default_audio_change": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0
+            },
+            {
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0
+            }
+          ]
+        },
+        "needs_remux": {
+          "type": "boolean"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "decisions",
+        "warnings",
+        "needs_remux"
+      ]
+    },
+    "TrackDecision": {
+      "type": "object",
+      "properties": {
+        "index": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "keep": {
+          "type": "boolean"
+        },
+        "lid": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "index",
+        "keep",
+        "reason"
+      ]
+    }
+  }
+}

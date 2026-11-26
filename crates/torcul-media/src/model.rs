@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Lusoris <lusoris@pm.me>
 // SPDX-License-Identifier: EUPL-1.2
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use torcul_policy::{Plan, TrackInfo, TrackKind};
@@ -96,7 +97,7 @@ pub struct PacketRecord {
     pub side_data: Box<[SideDataRecord]>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct PacketProof {
     pub count: u64,
     pub bytes: u64,
@@ -130,14 +131,14 @@ pub struct MediaSnapshot {
     pub tags: Tags,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct StreamMapping {
     pub source: usize,
     pub staging: usize,
     pub attached_pic: bool,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct StreamCounts {
     pub video: usize,
     pub audio: usize,
@@ -157,7 +158,7 @@ impl StreamCounts {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct MediaCounts {
     pub streams: StreamCounts,
     pub chapters: usize,
@@ -194,7 +195,7 @@ pub fn expected_counts(source: &MediaSnapshot, plan: &Plan) -> MediaCounts {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct VerifyReport {
     pub pass: bool,
     pub failures: Vec<String>,

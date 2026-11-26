@@ -1,0 +1,417 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "torcul/staging-record/1",
+  "type": "object",
+  "properties": {
+    "facts": {
+      "$ref": "#/$defs/FileFacts"
+    },
+    "fingerprint": {
+      "$ref": "#/$defs/Fingerprint"
+    },
+    "meta": {
+      "$ref": "#/$defs/TitleMeta"
+    },
+    "plan": {
+      "$ref": "#/$defs/Plan"
+    },
+    "source": {
+      "type": "string"
+    },
+    "verification": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/VerifyReport"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "verified_staging": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Fingerprint"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "version": {
+      "type": "integer",
+      "format": "uint32",
+      "const": 1,
+      "maximum": 4294967295,
+      "minimum": 0
+    }
+  },
+  "required": [
+    "version",
+    "source",
+    "fingerprint",
+    "facts",
+    "meta",
+    "plan"
+  ],
+  "$defs": {
+    "FileFacts": {
+      "type": "object",
+      "properties": {
+        "chapters": {
+          "type": "integer",
+          "format": "uint",
+          "default": 0,
+          "minimum": 0
+        },
+        "container": {
+          "type": "string"
+        },
+        "tracks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TrackInfo"
+          }
+        }
+      },
+      "required": [
+        "tracks",
+        "container"
+      ]
+    },
+    "Fingerprint": {
+      "type": "object",
+      "properties": {
+        "dev": {
+          "type": "integer",
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 0
+        },
+        "ino": {
+          "type": "integer",
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 0
+        },
+        "mtime_ns": {
+          "type": "integer",
+          "format": "uint128",
+          "minimum": 0
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "size": {
+          "type": "integer",
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 0
+        }
+      },
+      "required": [
+        "dev",
+        "ino",
+        "size",
+        "mtime_ns",
+        "sha256"
+      ]
+    },
+    "MediaCounts": {
+      "type": "object",
+      "properties": {
+        "attachments": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "chapters": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "streams": {
+          "$ref": "#/$defs/StreamCounts"
+        }
+      },
+      "required": [
+        "streams",
+        "chapters",
+        "attachments"
+      ]
+    },
+    "PacketProof": {
+      "type": "object",
+      "properties": {
+        "bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 0
+        },
+        "count": {
+          "type": "integer",
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 0
+        },
+        "sha256": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "count",
+        "bytes",
+        "sha256"
+      ]
+    },
+    "Plan": {
+      "type": "object",
+      "properties": {
+        "decisions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TrackDecision"
+          }
+        },
+        "default_audio_change": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0
+            },
+            {
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0
+            }
+          ]
+        },
+        "needs_remux": {
+          "type": "boolean"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "decisions",
+        "warnings",
+        "needs_remux"
+      ]
+    },
+    "StreamCounts": {
+      "type": "object",
+      "properties": {
+        "attachment": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "audio": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "subtitle": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "video": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "video",
+        "audio",
+        "subtitle",
+        "attachment"
+      ]
+    },
+    "StreamMapping": {
+      "type": "object",
+      "properties": {
+        "attached_pic": {
+          "type": "boolean"
+        },
+        "source": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "staging": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "source",
+        "staging",
+        "attached_pic"
+      ]
+    },
+    "TitleMeta": {
+      "type": "object",
+      "properties": {
+        "anime": {
+          "type": "boolean"
+        },
+        "original": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "anime"
+      ]
+    },
+    "TrackDecision": {
+      "type": "object",
+      "properties": {
+        "index": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "keep": {
+          "type": "boolean"
+        },
+        "lid": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "index",
+        "keep",
+        "reason"
+      ]
+    },
+    "TrackInfo": {
+      "type": "object",
+      "properties": {
+        "attached_pic": {
+          "type": "boolean"
+        },
+        "codec": {
+          "description": "FFmpeg codec descriptor name (uniquely identifies the codec id).",
+          "type": "string"
+        },
+        "dispositions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "index": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "kind": {
+          "$ref": "#/$defs/TrackKind"
+        },
+        "language": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "index",
+        "kind",
+        "codec",
+        "dispositions",
+        "attached_pic"
+      ]
+    },
+    "TrackKind": {
+      "type": "string",
+      "enum": [
+        "Video",
+        "Audio",
+        "Subtitle",
+        "Attachment",
+        "Data",
+        "Other"
+      ]
+    },
+    "VerifyReport": {
+      "type": "object",
+      "properties": {
+        "failures": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "output_counts": {
+          "$ref": "#/$defs/MediaCounts"
+        },
+        "pass": {
+          "type": "boolean"
+        },
+        "source_counts": {
+          "$ref": "#/$defs/MediaCounts"
+        },
+        "source_packets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PacketProof"
+          }
+        },
+        "staging_packets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PacketProof"
+          }
+        },
+        "stream_map": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/StreamMapping"
+          }
+        }
+      },
+      "required": [
+        "pass",
+        "failures",
+        "stream_map",
+        "source_counts",
+        "output_counts",
+        "source_packets",
+        "staging_packets"
+      ]
+    }
+  }
+}

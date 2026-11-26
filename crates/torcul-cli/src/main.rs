@@ -3,6 +3,7 @@
 mod args;
 mod files;
 mod report;
+mod schema;
 mod staging;
 use anyhow::{Result, bail};
 use clap::Parser;
@@ -49,6 +50,7 @@ fn run(cli: args::Cli) -> Result<()> {
         args::Command::Verify { staging, files } => {
             batch(&files, |file| staging::verify(file, &staging))
         }
+        args::Command::Schema { out } => schema::write_all(&out),
     }
 }
 

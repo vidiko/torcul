@@ -5,6 +5,7 @@ use crate::{
     report::{self, Metadata},
 };
 use anyhow::{Context, Result, bail, ensure};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use torcul_media::{
@@ -18,8 +19,9 @@ const MAX_PATH_ANCESTORS: usize = 4096;
 #[cfg(test)]
 mod staging_tests;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, JsonSchema)]
 pub struct Record {
+    #[schemars(extend("const" = 1))]
     version: u32,
     pub source: PathBuf,
     pub fingerprint: Fingerprint,

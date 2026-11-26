@@ -14,13 +14,16 @@ name = "torcul"
 path = "src/main.rs"
 
 [dependencies]
+torcul-job.workspace = true
 torcul-policy.workspace = true
 torcul-media.workspace = true
 clap = { version = "4.6.8", features = ["derive"] }
 anyhow = "1.0.104"
+schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
 
 [dev-dependencies]
+jsonschema.workspace = true
 wait-timeout.workspace = true

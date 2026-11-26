@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "torcul/job-request/1",
+  "description": "Job request contract (`torcul/job-request/1`) written by a caller to trigger `torcul`.",
+  "type": "object",
+  "properties": {
+    "mode": {
+      "description": "Execution stop point (`plan`, `stage` or `apply`).",
+      "$ref": "#/$defs/Mode"
+    },
+    "rollback_days": {
+      "description": "Days to retain the swapped-out original as a rollback copy; defaults to 7.",
+      "type": "integer",
+      "format": "uint16",
+      "default": 7,
+      "maximum": 65535,
+      "minimum": 0
+    },
+    "rule": {
+      "description": "Effective rule resolved by the caller.",
+      "$ref": "#/$defs/Rule"
+    },
+    "schema": {
+      "description": "Contract identifier (`\"torcul/job-request/1\"`).",
+      "$ref": "#/$defs/RequestSchema"
+    },
+    "source": {
+      "description": "Path to the library media file.",
+      "type": "string"
+    },
+    "staging_root": {
+      "description": "Staging root directory on the same filesystem device as `source`.",
+      "type": "string"
+    },
+    "title": {
+      "description": "Title facts needed by the policy planner (original language and anime flag).",
+      "$ref": "#/$defs/RequestTitle"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "source",
+    "mode",
+    "rule",
+    "title",
+    "staging_root"
+  ],
+  "$defs": {
+    "Mode": {
+      "description": "Execution depth requested for a job (`plan`, `stage` or `apply`).",
+      "type": "string",
+      "enum": [
+        "plan",
+        "stage",
+        "apply"
+      ]
+    },
+    "RequestSchema": {
+      "description": "Schema identifier for a version 1 job request (`\"torcul/job-request/1\"`).",
+      "type": "string",
+      "enum": [
+        "torcul/job-request/1"
+      ]
+    },
+    "RequestTitle": {
+      "description": "Title facts the caller resolves for the policy planner; unknown fields are refused.",
+      "type": "object",
+      "properties": {
+        "anime": {
+          "description": "Whether the title is anime.",
+          "type": "boolean"
+        },
+        "original": {
+          "description": "ISO 639 code of the title's original language, if known.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "anime"
+      ]
+    },
+    "Rule": {
+      "description": "Effective processing rule resolved by the caller for this library item.",
+      "type": "object",
+      "properties": {
+        "track": {
+          "description": "Track-selection policy parameters.",
+          "$ref": "#/$defs/TrackRule"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "track"
+      ]
+    },
+    "TrackRule": {
+      "description": "Effective track-selection rule resolved by the caller.",
+      "type": "object",
+      "properties": {
+        "languages": {
+          "description": "ISO 639 language codes to keep; at least one.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "languages"
+      ]
+    }
+  }
+}

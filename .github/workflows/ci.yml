@@ -115,6 +115,15 @@ jobs:
       - name: Verification gate
         run: make verify-all PRAETORCTL="$RUNNER_TEMP/bin/praetorctl"
 
+      - name: Check JSON Schema drift
+        env:
+          CARGO_BUILD_WARNINGS: deny
+        run: |
+          cargo run -p torcul-cli --locked --quiet -- schema --out schemas
+          git diff --exit-code -- schemas
+          untracked="$(git status --porcelain --untracked-files=all -- schemas)"
+          test -z "$untracked" || { printf '%s\n' "$untracked"; exit 1; }
+
       - name: Check FFmpeg-free torcul-media build
         # cargo check without a target filter is the selection that runs the
         # cargo::unused_dependencies lint; clippy with --all-targets does not.

@@ -10,6 +10,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+schemars.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 rust_iso639 = "=0.1.0"

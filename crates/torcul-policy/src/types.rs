@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Lusoris <lusoris@pm.me>
 // SPDX-License-Identifier: EUPL-1.2
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
@@ -11,7 +12,7 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum TrackKind {
     Video,
     Audio,
@@ -21,7 +22,7 @@ pub enum TrackKind {
     Other,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct TrackInfo {
     pub index: usize,
     pub kind: TrackKind,
@@ -33,7 +34,7 @@ pub struct TrackInfo {
     pub attached_pic: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct FileFacts {
     pub tracks: Vec<TrackInfo>,
     pub container: String,
@@ -41,13 +42,13 @@ pub struct FileFacts {
     pub chapters: usize,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct TitleMeta {
     pub original: Option<String>,
     pub anime: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct TrackDecision {
     pub index: usize,
     pub keep: bool,
@@ -56,7 +57,7 @@ pub struct TrackDecision {
     pub lid: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Plan {
     pub decisions: Vec<TrackDecision>,
     pub warnings: Vec<String>,

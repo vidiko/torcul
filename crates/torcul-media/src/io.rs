@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Lusoris <lusoris@pm.me>
 // SPDX-License-Identifier: EUPL-1.2
 use crate::{Error, Result, error::fs};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 #[cfg(feature = "ffmpeg")]
@@ -169,12 +170,13 @@ impl Seek for TimedFile {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Fingerprint {
     pub dev: u64,
     pub ino: u64,
     pub size: u64,
     pub mtime_ns: u128,
+    #[schemars(regex(pattern = r"^sha256:[0-9a-f]{64}$"))]
     pub sha256: String,
 }
 
