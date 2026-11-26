@@ -16,6 +16,7 @@ ffmpeg = ["dep:ffmpeg-next", "dep:mp4-atom", "dep:torcul-policy", "dep:tempfile"
 [dependencies]
 torcul-policy = { workspace = true, optional = true }
 ffmpeg-next = { version = "=9.1.0", default-features = false, features = ["format", "codec"], optional = true }
+schemars.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 sha2.workspace = true

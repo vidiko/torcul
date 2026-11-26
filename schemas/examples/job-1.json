@@ -1,0 +1,201 @@
+{
+  "schema": "torcul/job/1",
+  "id": "6f4b8c9d0e1a2b3c4d5e6f708192a3b4",
+  "request": {
+    "schema": "torcul/job-request/1",
+    "source": "/srv/media/movies/Example (2024)/Example (2024).mkv",
+    "mode": "apply",
+    "rule": {
+      "track": {
+        "languages": [
+          "deu",
+          "eng"
+        ]
+      }
+    },
+    "title": {
+      "original": "fra",
+      "anime": false
+    },
+    "staging_root": "/srv/media/.torcul-staging",
+    "rollback_days": 7
+  },
+  "state": "applied",
+  "history": [
+    {
+      "state": "planned",
+      "at": "2026-11-26T17:00:00Z",
+      "torcul_version": "0.1.0"
+    },
+    {
+      "state": "staged",
+      "at": "2026-11-26T17:00:04Z",
+      "torcul_version": "0.1.0"
+    },
+    {
+      "state": "verified",
+      "at": "2026-11-26T17:00:06Z",
+      "torcul_version": "0.1.0"
+    },
+    {
+      "state": "applied",
+      "at": "2026-11-26T17:00:07Z",
+      "torcul_version": "0.1.0"
+    }
+  ],
+  "source_fingerprint": {
+    "dev": 66306,
+    "ino": 9182736,
+    "size": 4294967296,
+    "mtime_ns": 1764176000000000000,
+    "sha256": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  },
+  "facts": {
+    "tracks": [
+      {
+        "index": 0,
+        "kind": "Video",
+        "codec": "hevc",
+        "language": "und",
+        "title": null,
+        "dispositions": [
+          "default"
+        ],
+        "attached_pic": false
+      },
+      {
+        "index": 1,
+        "kind": "Audio",
+        "codec": "eac3",
+        "language": "fra",
+        "title": "French 5.1",
+        "dispositions": [
+          "default"
+        ],
+        "attached_pic": false
+      },
+      {
+        "index": 2,
+        "kind": "Audio",
+        "codec": "eac3",
+        "language": "eng",
+        "title": "English 5.1",
+        "dispositions": [],
+        "attached_pic": false
+      }
+    ],
+    "container": "matroska",
+    "chapters": 12
+  },
+  "plan": {
+    "decisions": [
+      {
+        "index": 0,
+        "keep": true,
+        "reason": "preserve-stream"
+      },
+      {
+        "index": 1,
+        "keep": false,
+        "reason": "language-not-selected",
+        "lid": "pending"
+      },
+      {
+        "index": 2,
+        "keep": true,
+        "reason": "preferred-language"
+      }
+    ],
+    "warnings": [
+      "default-audio-moved"
+    ],
+    "default_audio_change": [
+      1,
+      2
+    ],
+    "needs_remux": true
+  },
+  "policy_version": "0.1.0",
+  "verdict": {
+    "pass": true,
+    "failures": [],
+    "stream_map": [
+      {
+        "source": 0,
+        "staging": 0,
+        "attached_pic": false
+      },
+      {
+        "source": 2,
+        "staging": 1,
+        "attached_pic": false
+      }
+    ],
+    "source_counts": {
+      "streams": {
+        "video": 1,
+        "audio": 2,
+        "subtitle": 0,
+        "attachment": 0
+      },
+      "chapters": 12,
+      "attachments": 0
+    },
+    "output_counts": {
+      "streams": {
+        "video": 1,
+        "audio": 1,
+        "subtitle": 0,
+        "attachment": 0
+      },
+      "chapters": 12,
+      "attachments": 0
+    },
+    "source_packets": [
+      {
+        "count": 144000,
+        "bytes": 3800000000,
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      {
+        "count": 187500,
+        "bytes": 240000000,
+        "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      {
+        "count": 187500,
+        "bytes": 240000000,
+        "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      }
+    ],
+    "staging_packets": [
+      {
+        "count": 144000,
+        "bytes": 3800000000,
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      {
+        "count": 187500,
+        "bytes": 240000000,
+        "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      }
+    ]
+  },
+  "staged_fingerprint": {
+    "dev": 66306,
+    "ino": 9182900,
+    "size": 4050000000,
+    "mtime_ns": 1764176404000000000,
+    "sha256": "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+  },
+  "applied_fingerprint": {
+    "dev": 66306,
+    "ino": 9182900,
+    "size": 4050000000,
+    "mtime_ns": 1764176404000000000,
+    "sha256": "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+  },
+  "rollback_path": null,
+  "held": null,
+  "failure": null
+}

@@ -41,4 +41,9 @@ pub enum Command {
         #[arg(required = true)]
         files: Vec<PathBuf>,
     },
+    /// Write JSON Schema Draft 2020-12 files to an output directory.
+    Schema {
+        #[arg(long)]
+        out: PathBuf,
+    },
 }

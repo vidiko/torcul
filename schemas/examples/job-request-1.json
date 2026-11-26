@@ -1,0 +1,19 @@
+{
+  "schema": "torcul/job-request/1",
+  "source": "/srv/media/movies/Example (2024)/Example (2024).mkv",
+  "mode": "apply",
+  "rule": {
+    "track": {
+      "languages": [
+        "deu",
+        "eng"
+      ]
+    }
+  },
+  "title": {
+    "original": "fra",
+    "anime": false
+  },
+  "staging_root": "/srv/media/.torcul-staging",
+  "rollback_days": 7
+}

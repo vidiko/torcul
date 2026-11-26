@@ -13,7 +13,25 @@ use std::{
 };
 use support::*;
 use tempfile::TempDir;
-use torcul_media::io::{Fingerprint, fingerprint};
+use torcul_media::io::{Deadline, Fingerprint, fingerprint};
+
+fn assert_matches_schema(schema_file: &str, instance: &serde_json::Value) {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../schemas")
+        .join(schema_file);
+    let bytes = Deadline::new().run(|| fs::read(&path)).unwrap();
+    let schema: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let validator = jsonschema::draft202012::options()
+        .should_validate_formats(true)
+        .offline()
+        .build(&schema)
+        .unwrap();
+    assert!(
+        validator.is_valid(instance),
+        "{schema_file}: {}",
+        validator.iter_errors(instance).into_errors()
+    );
+}
 
 fn cli(args: &[&OsStr]) -> Output {
     execute(
@@ -87,7 +105,9 @@ fn cli_dry_run_report_matches_oracle_and_marks_pending_lid() {
         "{}",
         out.stdout
     );
-    let rows: Vec<serde_json::Value> = serde_json::from_slice(&fs::read(json).unwrap()).unwrap();
+    let report_doc: serde_json::Value = serde_json::from_slice(&fs::read(json).unwrap()).unwrap();
+    assert_matches_schema("plan-report.schema.json", &report_doc);
+    let rows = report_doc.as_array().unwrap();
     assert_eq!(rows.len(), 11);
     for (report, oracle) in rows.iter().zip(&fx.manifest.fixtures) {
         let p: torcul_policy::Plan = serde_json::from_value(report["plan"].clone()).unwrap();
@@ -175,6 +195,7 @@ fn cli_remux_sidecar_preserves_pending_lid_and_staging_fingerprint() {
     let sidecar = staging.join("f01_movie_en_de_extra.mkv.torcul.json");
 
     let initial: serde_json::Value = serde_json::from_slice(&fs::read(&sidecar).unwrap()).unwrap();
+    assert_matches_schema("staging-record-1.schema.json", &initial);
     assert_eq!(initial["plan"]["decisions"][3]["lid"], "pending");
     assert!(initial["plan"]["decisions"][0].get("lid").is_none());
     assert!(initial["verified_staging"].is_null());
@@ -184,6 +205,7 @@ fn cli_remux_sidecar_preserves_pending_lid_and_staging_fingerprint() {
 
     let after_verify: serde_json::Value =
         serde_json::from_slice(&fs::read(&sidecar).unwrap()).unwrap();
+    assert_matches_schema("staging-record-1.schema.json", &after_verify);
     assert!(after_verify.get("verified_staging_sha256").is_none());
     let recorded: Fingerprint =
         serde_json::from_value(after_verify["verified_staging"].clone()).unwrap();
@@ -206,6 +228,24 @@ fn cli_remux_sidecar_preserves_pending_lid_and_staging_fingerprint() {
         serde_json::from_slice(&fs::read(&sidecar).unwrap()).unwrap();
     assert_eq!(after_touch["verification"]["pass"], false);
     assert!(after_touch["verified_staging"].is_null());
+}
+
+#[test]
+fn cli_verify_rejects_unsupported_sidecar_version() {
+    let (_tmp, src, staging) = prepared("f07_default_dropped.mkv");
+    let sidecar = staging.join("f07_default_dropped.mkv.torcul.json");
+    let mut record: serde_json::Value =
+        serde_json::from_slice(&fs::read(&sidecar).unwrap()).unwrap();
+    record["version"] = serde_json::json!(2);
+    fs::write(&sidecar, serde_json::to_vec_pretty(&record).unwrap()).unwrap();
+
+    let out = command("verify", None, Some(&staging), &src);
+    assert!(!out.success);
+    assert!(
+        out.stderr.contains("unsupported sidecar version"),
+        "{}",
+        out.stderr
+    );
 }
 
 #[test]

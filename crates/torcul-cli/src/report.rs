@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: EUPL-1.2
 use crate::files;
 use anyhow::{Context, Result, bail};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
@@ -45,7 +46,7 @@ pub fn title<'a>(path: &Path, meta: &'a Metadata) -> Result<&'a TitleMeta> {
         .with_context(|| format!("no metadata entry for {name}"))
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub struct FileReport {
     pub path: PathBuf,
     pub plan: Option<Plan>,

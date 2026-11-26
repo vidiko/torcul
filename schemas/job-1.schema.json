@@ -1,0 +1,743 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "torcul/job/1",
+  "description": "Durable job state record (`torcul/job/1`) written atomically to `<staging_root>/<id>/job.json`.",
+  "type": "object",
+  "properties": {
+    "applied_fingerprint": {
+      "description": "Fingerprint of the applied output at the library path after exchange.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Fingerprint"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "facts": {
+      "description": "Container, chapter and stream facts probed from the source file.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/FileFacts"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "failure": {
+      "description": "Step and error message when an operation fails.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Failure"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "held": {
+      "description": "Inodes observed when restart recovery places the job into `held`.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/HeldInodes"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "history": {
+      "description": "Ordered log of state transitions.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Transition"
+      }
+    },
+    "id": {
+      "description": "First 32 lowercase hex digits of the SHA-256 of the canonical source path.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$"
+    },
+    "plan": {
+      "description": "Track-selection and stream plan derived from `facts`, `request.rule` and `request.title`.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Plan"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "policy_version": {
+      "description": "Version of the policy planner that derived `plan`.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "request": {
+      "description": "Original request that created or replaced this job.",
+      "$ref": "#/$defs/JobRequest"
+    },
+    "rollback_path": {
+      "description": "Library path recorded when a rollback begins.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "schema": {
+      "description": "Contract identifier (`\"torcul/job/1\"`).",
+      "$ref": "#/$defs/JobSchema"
+    },
+    "source_fingerprint": {
+      "description": "Fingerprint of the library source file captured at plan time.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Fingerprint"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "staged_fingerprint": {
+      "description": "Fingerprint of the verified output in staging prior to exchange.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Fingerprint"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "state": {
+      "description": "Current lifecycle state of the job.",
+      "$ref": "#/$defs/JobState"
+    },
+    "verdict": {
+      "description": "Verification report comparing the staged output against the source and plan.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/VerifyReport"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "schema",
+    "id",
+    "request",
+    "state",
+    "history"
+  ],
+  "$defs": {
+    "Failure": {
+      "description": "Step name and diagnostic recorded when a job enters `failed`, a swap back during apply included.",
+      "type": "object",
+      "properties": {
+        "error": {
+          "description": "Human-readable error message.",
+          "type": "string"
+        },
+        "step": {
+          "description": "Execution step that failed.",
+          "$ref": "#/$defs/StepName"
+        }
+      },
+      "required": [
+        "step",
+        "error"
+      ]
+    },
+    "FileFacts": {
+      "type": "object",
+      "properties": {
+        "chapters": {
+          "type": "integer",
+          "format": "uint",
+          "default": 0,
+          "minimum": 0
+        },
+        "container": {
+          "type": "string"
+        },
+        "tracks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TrackInfo"
+          }
+        }
+      },
+      "required": [
+        "tracks",
+        "container"
+      ]
+    },
+    "Fingerprint": {
+      "type": "object",
+      "properties": {
+        "dev": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "ino": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "mtime_ns": {
+          "type": "integer",
+          "format": "uint128",
+          "minimum": 0
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "size": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "dev",
+        "ino",
+        "size",
+        "mtime_ns",
+        "sha256"
+      ]
+    },
+    "HeldInodes": {
+      "description": "Inodes observed at the library path and staging output when a restart enters `held`.",
+      "type": "object",
+      "properties": {
+        "library": {
+          "description": "Inode found at the library path, or `None` if missing.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "staging": {
+          "description": "Inode found at the staging output path, or `None` if missing.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        }
+      }
+    },
+    "JobRequest": {
+      "description": "Job request contract (`torcul/job-request/1`) written by a caller to trigger `torcul`.",
+      "type": "object",
+      "properties": {
+        "mode": {
+          "description": "Execution stop point (`plan`, `stage` or `apply`).",
+          "$ref": "#/$defs/Mode"
+        },
+        "rollback_days": {
+          "description": "Days to retain the swapped-out original as a rollback copy; defaults to 7.",
+          "type": "integer",
+          "format": "uint16",
+          "default": 7,
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "rule": {
+          "description": "Effective rule resolved by the caller.",
+          "$ref": "#/$defs/Rule"
+        },
+        "schema": {
+          "description": "Contract identifier (`\"torcul/job-request/1\"`).",
+          "$ref": "#/$defs/RequestSchema"
+        },
+        "source": {
+          "description": "Path to the library media file.",
+          "type": "string"
+        },
+        "staging_root": {
+          "description": "Staging root directory on the same filesystem device as `source`.",
+          "type": "string"
+        },
+        "title": {
+          "description": "Title facts needed by the policy planner (original language and anime flag).",
+          "$ref": "#/$defs/TitleMeta"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "source",
+        "mode",
+        "rule",
+        "title",
+        "staging_root"
+      ]
+    },
+    "JobSchema": {
+      "description": "Schema identifier for a version 1 job record (`\"torcul/job/1\"`).",
+      "type": "string",
+      "enum": [
+        "torcul/job/1"
+      ]
+    },
+    "JobState": {
+      "description": "Lifecycle state recorded in `job.json` (ADR-0002 decision 9).",
+      "oneOf": [
+        {
+          "description": "Plan written, nothing staged.",
+          "type": "string",
+          "const": "planned"
+        },
+        {
+          "description": "The plan changes nothing; final.",
+          "type": "string",
+          "const": "unchanged"
+        },
+        {
+          "description": "Output complete in staging.",
+          "type": "string",
+          "const": "staged"
+        },
+        {
+          "description": "Verdict passed; ready to apply.",
+          "type": "string",
+          "const": "verified"
+        },
+        {
+          "description": "Verdict failed; final, library untouched.",
+          "type": "string",
+          "const": "rejected"
+        },
+        {
+          "description": "Exchange in progress.",
+          "type": "string",
+          "const": "applying"
+        },
+        {
+          "description": "The library holds the output; the original is the rollback copy.",
+          "type": "string",
+          "const": "applied"
+        },
+        {
+          "description": "Reverse exchange in progress.",
+          "type": "string",
+          "const": "rolling_back"
+        },
+        {
+          "description": "The library holds the original again; final.",
+          "type": "string",
+          "const": "rolled_back"
+        },
+        {
+          "description": "A restart found the files in no state it can finish; both files, the record and the applied-index entry are kept until an operator commits the job.",
+          "type": "string",
+          "const": "held"
+        },
+        {
+          "description": "Rollback copy deleted; final.",
+          "type": "string",
+          "const": "committed"
+        },
+        {
+          "description": "A step failed; the record names the step and the error; final.",
+          "type": "string",
+          "const": "failed"
+        }
+      ]
+    },
+    "MediaCounts": {
+      "type": "object",
+      "properties": {
+        "attachments": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "chapters": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "streams": {
+          "$ref": "#/$defs/StreamCounts"
+        }
+      },
+      "required": [
+        "streams",
+        "chapters",
+        "attachments"
+      ]
+    },
+    "Mode": {
+      "description": "Execution depth requested for a job (`plan`, `stage` or `apply`).",
+      "type": "string",
+      "enum": [
+        "plan",
+        "stage",
+        "apply"
+      ]
+    },
+    "PacketProof": {
+      "type": "object",
+      "properties": {
+        "bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "count": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "sha256": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "count",
+        "bytes",
+        "sha256"
+      ]
+    },
+    "Plan": {
+      "type": "object",
+      "properties": {
+        "decisions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TrackDecision"
+          }
+        },
+        "default_audio_change": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0
+            },
+            {
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0
+            }
+          ]
+        },
+        "needs_remux": {
+          "type": "boolean"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "decisions",
+        "warnings",
+        "needs_remux"
+      ]
+    },
+    "RequestSchema": {
+      "description": "Schema identifier for a version 1 job request (`\"torcul/job-request/1\"`).",
+      "type": "string",
+      "enum": [
+        "torcul/job-request/1"
+      ]
+    },
+    "Rule": {
+      "description": "Effective processing rule resolved by the caller for this library item.",
+      "type": "object",
+      "properties": {
+        "track": {
+          "description": "Track-selection policy parameters.",
+          "$ref": "#/$defs/TrackRule"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "track"
+      ]
+    },
+    "StepName": {
+      "description": "Pipeline execution step recorded on failure.",
+      "type": "string",
+      "enum": [
+        "plan",
+        "stage",
+        "verify",
+        "apply",
+        "rollback",
+        "commit",
+        "restart"
+      ]
+    },
+    "StreamCounts": {
+      "type": "object",
+      "properties": {
+        "attachment": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "audio": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "subtitle": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "video": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "video",
+        "audio",
+        "subtitle",
+        "attachment"
+      ]
+    },
+    "StreamMapping": {
+      "type": "object",
+      "properties": {
+        "attached_pic": {
+          "type": "boolean"
+        },
+        "source": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "staging": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "source",
+        "staging",
+        "attached_pic"
+      ]
+    },
+    "TitleMeta": {
+      "type": "object",
+      "properties": {
+        "anime": {
+          "type": "boolean"
+        },
+        "original": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "anime"
+      ]
+    },
+    "TrackDecision": {
+      "type": "object",
+      "properties": {
+        "index": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "keep": {
+          "type": "boolean"
+        },
+        "lid": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "index",
+        "keep",
+        "reason"
+      ]
+    },
+    "TrackInfo": {
+      "type": "object",
+      "properties": {
+        "attached_pic": {
+          "type": "boolean"
+        },
+        "codec": {
+          "description": "FFmpeg codec descriptor name (uniquely identifies the codec id).",
+          "type": "string"
+        },
+        "dispositions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "index": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "kind": {
+          "$ref": "#/$defs/TrackKind"
+        },
+        "language": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "index",
+        "kind",
+        "codec",
+        "dispositions",
+        "attached_pic"
+      ]
+    },
+    "TrackKind": {
+      "type": "string",
+      "enum": [
+        "Video",
+        "Audio",
+        "Subtitle",
+        "Attachment",
+        "Data",
+        "Other"
+      ]
+    },
+    "TrackRule": {
+      "description": "Effective track-selection rule resolved by the caller.",
+      "type": "object",
+      "properties": {
+        "languages": {
+          "description": "ISO 639 language codes to keep.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "languages"
+      ]
+    },
+    "Transition": {
+      "description": "Recorded state transition with timestamp and `torcul` version.",
+      "type": "object",
+      "properties": {
+        "at": {
+          "description": "RFC 3339 UTC timestamp when the state was recorded.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "state": {
+          "description": "State entered by this transition.",
+          "$ref": "#/$defs/JobState"
+        },
+        "torcul_version": {
+          "description": "Version of `torcul` that wrote this transition.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "state",
+        "at",
+        "torcul_version"
+      ]
+    },
+    "VerifyReport": {
+      "type": "object",
+      "properties": {
+        "failures": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "output_counts": {
+          "$ref": "#/$defs/MediaCounts"
+        },
+        "pass": {
+          "type": "boolean"
+        },
+        "source_counts": {
+          "$ref": "#/$defs/MediaCounts"
+        },
+        "source_packets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PacketProof"
+          }
+        },
+        "staging_packets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PacketProof"
+          }
+        },
+        "stream_map": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/StreamMapping"
+          }
+        }
+      },
+      "required": [
+        "pass",
+        "failures",
+        "stream_map",
+        "source_counts",
+        "output_counts",
+        "source_packets",
+        "staging_packets"
+      ]
+    }
+  }
+}

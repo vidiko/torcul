@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Lusoris <lusoris@pm.me>
 # SPDX-License-Identifier: EUPL-1.2
 [workspace]
-members = ["crates/torcul-policy", "crates/torcul-media", "crates/torcul-cli"]
+members = ["crates/torcul-policy", "crates/torcul-media", "crates/torcul-job", "crates/torcul-cli"]
 resolver = "3"
 
 [workspace.package]
@@ -10,7 +10,9 @@ license = "EUPL-1.2"
 version = "0.1.0"
 
 [workspace.dependencies]
+jsonschema = { version = "0.63.2", default-features = false }
 libc = "0.2.191"
+schemars = "1.2.3"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 thiserror = "2.0.21"
@@ -19,6 +21,7 @@ tempfile = "3.27.0"
 wait-timeout = "0.2.1"
 torcul-policy = { path = "crates/torcul-policy" }
 torcul-media = { path = "crates/torcul-media" }
+torcul-job = { path = "crates/torcul-job" }
 
 [workspace.lints.cargo]
 unused_dependencies = "deny"

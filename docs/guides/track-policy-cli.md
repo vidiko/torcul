@@ -32,7 +32,8 @@ target/debug/torcul plan --meta target/fx/manifest.json \
 Read the table to see the input indices kept and dropped for each file,
 whether it needs a remux, and any warnings. A drop appears as
 `drop (pending LID)` in the table and `"lid": "pending"` in JSON until the
-language-check stage exists. [Plan report][report] · [Track policy][policy]
+language-check stage exists. [Plan report][report] · [Track policy][policy] ·
+[JSON Schemas][schemas]
 
 ## Metadata and track selection
 
@@ -134,3 +135,4 @@ call. A kernel stall inside a regular-file call can still outlast the deadline.
 [round-trip]: ../../crates/torcul-media/tests/metadata_round_trip.rs
 [inspect]: ../../crates/torcul-media/src/inspect.rs
 [packets]: ../../crates/torcul-media/src/packets.rs
+[schemas]: ../reference/json-schemas.md

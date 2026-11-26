@@ -13,6 +13,12 @@ precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 Lusoris <lusoris@pm.me>"
 SPDX-License-Identifier = "EUPL-1.2"
 
+[[annotations]]
+path = ["schemas/**"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Lusoris <lusoris@pm.me>"
+SPDX-License-Identifier = "EUPL-1.2"
+
 # Written by `praetorctl adopt` and held in step by `praetorctl audit`.
 # "closest" keeps the terms a generated file states itself.
 [[annotations]]

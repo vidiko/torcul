@@ -24,21 +24,25 @@ pub fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T> {
     }
     serde_json::from_slice(&bytes).with_context(|| format!("parse {}", path.display()))
 }
-pub fn write_json(path: &Path, data: &impl Serialize) -> Result<()> {
+pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     let deadline = Deadline::new();
     let parent = path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
     let mut temp = deadline.run(|| tempfile::NamedTempFile::new_in(parent))?;
-    let bytes = serde_json::to_vec_pretty(data)?;
-    deadline.run(|| temp.write_all(&bytes))?;
+    deadline.run(|| temp.write_all(bytes))?;
     deadline.run(|| temp.as_file().sync_all())?;
     deadline.check()?;
     temp.persist(path)
         .with_context(|| format!("persist {}", path.display()))?;
     deadline.check()?;
     Ok(())
+}
+
+pub fn write_json(path: &Path, data: &impl Serialize) -> Result<()> {
+    let bytes = serde_json::to_vec_pretty(data)?;
+    write_atomic(path, &bytes)
 }
 pub fn check_json_destination(dest: &Path, meta: &Path, inputs: &[PathBuf]) -> Result<()> {
     let deadline = Deadline::new();
