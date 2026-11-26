@@ -116,7 +116,13 @@ jobs:
         run: make verify-all PRAETORCTL="$RUNNER_TEMP/bin/praetorctl"
 
       - name: Check FFmpeg-free torcul-media build
-        run: cargo clippy -p torcul-media --no-default-features --all-targets --locked -- -D warnings
+        # cargo check without a target filter is the selection that runs the
+        # cargo::unused_dependencies lint; clippy with --all-targets does not.
+        env:
+          CARGO_BUILD_WARNINGS: deny
+        run: |
+          cargo check -p torcul-media --no-default-features --locked
+          cargo clippy -p torcul-media --no-default-features --all-targets --locked -- -D warnings
 
       - name: Sign-off on pull request commits
         if: github.event_name == 'pull_request'
