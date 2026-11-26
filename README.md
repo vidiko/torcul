@@ -50,7 +50,8 @@ On Unix, install the [pinned Rust toolchain](rust-toolchain.toml), Clang, pkg-co
 ```sh
 cargo build --locked
 python3 -I tools/fixtures/track_fixtures.py target/fx
-target/debug/torcul plan --meta target/fx/manifest.json --json target/plan.json target/fx
+target/debug/torcul plan --meta target/fx/manifest.json \
+  --json target/plan.json target/fx
 ```
 
 The table shows the stream indices to keep or drop for each file. To stage and verify one of them, follow the [track-policy CLI guide](docs/guides/track-policy-cli.md).
