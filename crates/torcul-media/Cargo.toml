@@ -6,9 +6,12 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[lints]
+workspace = true
+
 [features]
 default = ["ffmpeg"]
-ffmpeg = ["dep:ffmpeg-next", "dep:mp4-atom", "dep:torcul-policy"]
+ffmpeg = ["dep:ffmpeg-next", "dep:mp4-atom", "dep:torcul-policy", "dep:tempfile"]
 
 [dependencies]
 torcul-policy = { workspace = true, optional = true }
@@ -17,13 +20,14 @@ serde.workspace = true
 thiserror.workspace = true
 sha2.workspace = true
 mp4-atom = { version = "=0.17.1", optional = true }
-tempfile.workspace = true
+tempfile = { workspace = true, optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
+tempfile.workspace = true
 wait-timeout.workspace = true
 
 [[test]]

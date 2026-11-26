@@ -19,3 +19,6 @@ tempfile = "3.27.0"
 wait-timeout = "0.2.1"
 torcul-policy = { path = "crates/torcul-policy" }
 torcul-media = { path = "crates/torcul-media" }
+
+[workspace.lints.cargo]
+unused_dependencies = "deny"
