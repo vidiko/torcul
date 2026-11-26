@@ -40,7 +40,6 @@
     },
     "version": {
       "type": "integer",
-      "format": "uint32",
       "const": 1,
       "maximum": 4294967295,
       "minimum": 0
@@ -60,8 +59,8 @@
       "properties": {
         "chapters": {
           "type": "integer",
-          "format": "uint",
           "default": 0,
+          "maximum": 18446744073709551615,
           "minimum": 0
         },
         "container": {
@@ -84,19 +83,17 @@
       "properties": {
         "dev": {
           "type": "integer",
-          "format": "uint64",
           "maximum": 18446744073709551615,
           "minimum": 0
         },
         "ino": {
           "type": "integer",
-          "format": "uint64",
           "maximum": 18446744073709551615,
           "minimum": 0
         },
         "mtime_ns": {
           "type": "integer",
-          "format": "uint128",
+          "maximum": 18446744073709551615,
           "minimum": 0
         },
         "sha256": {
@@ -105,7 +102,6 @@
         },
         "size": {
           "type": "integer",
-          "format": "uint64",
           "maximum": 18446744073709551615,
           "minimum": 0
         }
@@ -123,12 +119,12 @@
       "properties": {
         "attachments": {
           "type": "integer",
-          "format": "uint",
+          "maximum": 18446744073709551615,
           "minimum": 0
         },
         "chapters": {
           "type": "integer",
-          "format": "uint",
+          "maximum": 18446744073709551615,
           "minimum": 0
         },
         "streams": {
@@ -146,18 +142,17 @@
       "properties": {
         "bytes": {
           "type": "integer",
-          "format": "uint64",
           "maximum": 18446744073709551615,
           "minimum": 0
         },
         "count": {
           "type": "integer",
-          "format": "uint64",
           "maximum": 18446744073709551615,
           "minimum": 0
         },
         "sha256": {
-          "type": "string"
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
         }
       },
       "required": [
@@ -185,12 +180,12 @@
           "prefixItems": [
             {
               "type": "integer",
-              "format": "uint",
+              "maximum": 18446744073709551615,
               "minimum": 0
             },
             {
               "type": "integer",
-              "format": "uint",
+              "maximum": 18446744073709551615,
               "minimum": 0
             }
           ]
@@ -216,22 +211,22 @@
       "properties": {
         "attachment": {
           "type": "integer",
-          "format": "uint",
+          "maximum": 18446744073709551615,
           "minimum": 0
         },
         "audio": {
           "type": "integer",
-          "format": "uint",
+          "maximum": 18446744073709551615,
           "minimum": 0
         },
         "subtitle": {
           "type": "integer",
-          "format": "uint",
+          "maximum": 18446744073709551615,
           "minimum": 0
         },
         "video": {
           "type": "integer",
-          "format": "uint",
+          "maximum": 18446744073709551615,
           "minimum": 0
         }
       },
@@ -250,12 +245,12 @@
         },
         "source": {
           "type": "integer",
-          "format": "uint",
+          "maximum": 18446744073709551615,
           "minimum": 0
         },
         "staging": {
           "type": "integer",
-          "format": "uint",
+          "maximum": 18446744073709551615,
           "minimum": 0
         }
       },
@@ -287,7 +282,7 @@
       "properties": {
         "index": {
           "type": "integer",
-          "format": "uint",
+          "maximum": 18446744073709551615,
           "minimum": 0
         },
         "keep": {
@@ -328,7 +323,7 @@
         },
         "index": {
           "type": "integer",
-          "format": "uint",
+          "maximum": 18446744073709551615,
           "minimum": 0
         },
         "kind": {

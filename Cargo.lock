@@ -1230,6 +1230,7 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "torcul-job",
  "torcul-media",
@@ -1255,6 +1256,7 @@ dependencies = [
  "ffmpeg-next",
  "libc",
  "mp4-atom",
+ "regex",
  "schemars",
  "serde",
  "serde_json",
@@ -1272,6 +1274,7 @@ dependencies = [
  "rust_iso639",
  "schemars",
  "serde",
+ "serde_json",
  "thiserror 2.0.21",
 ]
 

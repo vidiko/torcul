@@ -219,3 +219,44 @@ fn path_dev_follows_directory_symlinks_and_rejects_missing() {
     let expired = Deadline::with_timeout(Duration::ZERO).unwrap();
     assert!(path_dev(&target, expired).is_err());
 }
+
+#[test]
+fn fingerprint_serde_refuses_bad_sha256_and_mtime_overflow() {
+    let valid = serde_json::json!({
+        "dev": 1,
+        "ino": 2,
+        "size": 3,
+        "mtime_ns": u64::MAX,
+        "sha256": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    });
+    let parsed: Fingerprint = serde_json::from_value(valid.clone()).unwrap();
+    assert_eq!(parsed.mtime_ns, u64::MAX);
+    assert_eq!(
+        duration_to_mtime_ns(Duration::from_nanos(u64::MAX)).unwrap(),
+        u64::MAX
+    );
+    let range_err = duration_to_mtime_ns(Duration::new(u64::MAX, 0)).unwrap_err();
+    assert!(
+        range_err
+            .to_string()
+            .contains("mtime beyond u64 nanoseconds"),
+        "{range_err}"
+    );
+
+    for bad_hash in [
+        "sha256:short",
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "sha256:A123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    ] {
+        let mut doc = valid.clone();
+        doc["sha256"] = serde_json::json!(bad_hash);
+        assert!(
+            serde_json::from_value::<Fingerprint>(doc).is_err(),
+            "expected bad sha256 {bad_hash} to fail"
+        );
+    }
+
+    let mut overflow = valid;
+    overflow["mtime_ns"] = serde_json::from_str("18446744073709551616").unwrap();
+    assert!(serde_json::from_value::<Fingerprint>(overflow).is_err());
+}

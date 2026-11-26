@@ -2,11 +2,12 @@
 // SPDX-License-Identifier: EUPL-1.2
 use jsonschema::Validator;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Command, ExitStatus, Stdio},
     time::Duration,
 };
 use torcul_job::{Job, JobRequest, JobState};
@@ -37,7 +38,7 @@ fn validator_for(name: &str) -> Validator {
     validator_with_formats(name, true)
 }
 
-fn run_schema_subcommand(out: &Path) {
+fn invoke_schema_subcommand(out: &Path) -> (ExitStatus, String) {
     let deadline = Deadline::new();
     let logs = deadline.run(tempfile::tempdir).unwrap();
     let stderr_path = logs.path().join("stderr");
@@ -59,6 +60,11 @@ fn run_schema_subcommand(out: &Path) {
         }
     };
     let err = deadline.run(|| fs::read_to_string(&stderr_path)).unwrap();
+    (status, err)
+}
+
+fn run_schema_subcommand(out: &Path) {
+    let (status, err) = invoke_schema_subcommand(out);
     assert!(status.success(), "torcul schema failed: {err}");
 }
 
@@ -296,6 +302,15 @@ fn request_title_and_languages_boundaries() {
         "{err}"
     );
 
+    let mut dup_langs = base.clone();
+    dup_langs["rule"]["track"]["languages"] = json!(["eng", "eng"]);
+    assert!(!req_validator.is_valid(&dup_langs));
+    let dup_err = serde_json::from_value::<JobRequest>(dup_langs).unwrap_err();
+    assert!(
+        dup_err.to_string().contains("duplicate item in a set"),
+        "{dup_err}"
+    );
+
     let mut title_only_anime = base.clone();
     title_only_anime["title"] = json!({ "anime": true });
     assert!(req_validator.is_valid(&title_only_anime));
@@ -309,7 +324,7 @@ fn request_title_and_languages_boundaries() {
 }
 
 #[test]
-fn plan_report_entries_carry_exactly_one_outcome() {
+fn plan_report_entries_hold_a_plan() {
     let validator = validator_for("plan-report.schema.json");
     let plan = read_json_file(&schemas_dir().join("examples/job-1.json"))["plan"].clone();
     let path = "/srv/media/movies/Example.mkv";
@@ -317,7 +332,7 @@ fn plan_report_entries_carry_exactly_one_outcome() {
         (json!({ "path": path, "plan": plan, "error": null }), true),
         (
             json!({ "path": path, "plan": null, "error": "probe failed" }),
-            true,
+            false,
         ),
         (json!({ "path": path, "plan": null, "error": null }), false),
         (
@@ -333,36 +348,63 @@ fn plan_report_entries_carry_exactly_one_outcome() {
     assert!(validator.is_valid(&json!([])));
 }
 
+fn assert_job_validity(validator: &Validator, doc: &Value, expected_valid: bool) {
+    assert_eq!(validator.is_valid(doc), expected_valid, "{doc}");
+    assert_eq!(
+        serde_json::from_value::<Job>(doc.clone()).is_ok(),
+        expected_valid,
+        "serde disagreed with schema for {doc}"
+    );
+}
+
 #[test]
 fn restart_states_require_fingerprints_and_rollback_path() {
     let validator = validator_for("job-1.schema.json");
     let base = read_json_file(&schemas_dir().join("examples/job-1.json"));
-    let with = |state: &str, edit: &dyn Fn(&mut Value)| {
+    let check = |state: &str, expected: bool, edit: &dyn Fn(&mut Value)| {
         let mut doc = base.clone();
         doc["state"] = json!(state);
         edit(&mut doc);
-        validator.is_valid(&doc)
+        assert_job_validity(&validator, &doc, expected);
     };
     let keep = |_: &mut Value| {};
     let null_source = |d: &mut Value| d["source_fingerprint"] = Value::Null;
+    let null_applied = |d: &mut Value| d["applied_fingerprint"] = Value::Null;
     let drop_staged = |d: &mut Value| {
         d.as_object_mut().unwrap().remove("staged_fingerprint");
     };
     let set_rollback = |d: &mut Value| d["rollback_path"] = json!("/srv/media/movies/Example.mkv");
 
-    assert!(with("applying", &keep));
-    assert!(!with("applying", &null_source));
-    assert!(!with("applying", &drop_staged));
-    assert!(!with("rolling_back", &keep));
-    assert!(with("rolling_back", &set_rollback));
-    assert!(!with("rolling_back", &|d| {
+    check("verified", true, &keep);
+    check("verified", false, &drop_staged);
+    check("applying", true, &keep);
+    check("applying", false, &null_source);
+    check("applying", false, &drop_staged);
+    check("applied", true, &keep);
+    check("applied", false, &null_applied);
+    check("applied", false, &null_source);
+    check("applied", false, &drop_staged);
+    check("rolling_back", false, &keep);
+    check("rolling_back", true, &set_rollback);
+    check("rolling_back", false, &|d| {
         set_rollback(d);
         null_source(d);
-    }));
-    assert!(with("planned", &|d| {
+    });
+    check("held", false, &keep);
+    check("held", true, &|d| {
+        d["held"] = json!({ "library": 42, "staging": null });
+    });
+    check("failed", false, &keep);
+    check("failed", true, &|d| {
         null_source(d);
         drop_staged(d);
-    }));
+        d["failure"] = json!({ "step": "apply", "error": "exchange failed" });
+    });
+    check("planned", true, &|d| {
+        null_source(d);
+        drop_staged(d);
+        null_applied(d);
+    });
 }
 
 #[test]
@@ -395,7 +437,7 @@ fn job_id_timestamp_and_fingerprint_boundaries() {
 
     let mut valid_32 = base.clone();
     valid_32["id"] = json!("0123456789abcdef0123456789abcdef");
-    assert!(job_validator.is_valid(&valid_32));
+    assert_job_validity(&job_validator, &valid_32, true);
 
     for bad_id in [
         "0123456789abcdef0123456789abcde",
@@ -404,23 +446,114 @@ fn job_id_timestamp_and_fingerprint_boundaries() {
     ] {
         let mut doc = base.clone();
         doc["id"] = json!(bad_id);
-        assert!(!job_validator.is_valid(&doc), "expected bad id: {bad_id}");
+        assert_job_validity(&job_validator, &doc, false);
     }
+
+    let mut empty_history = base.clone();
+    empty_history["history"] = json!([]);
+    assert_job_validity(&job_validator, &empty_history, false);
 
     let shape_only = validator_with_formats("job-1.schema.json", false);
     let mut bad_time = base.clone();
     bad_time["history"][0]["at"] = json!("yesterday");
-    assert!(!job_validator.is_valid(&bad_time));
     assert!(!shape_only.is_valid(&bad_time));
+    assert_job_validity(&job_validator, &bad_time, false);
+
     let mut month_13 = base.clone();
     month_13["history"][0]["at"] = json!("2026-13-01T00:00:00Z");
     assert!(shape_only.is_valid(&month_13));
+    assert!(serde_json::from_value::<Job>(month_13.clone()).is_ok());
     assert!(!job_validator.is_valid(&month_13));
+
     let mut fractional = base.clone();
     fractional["history"][0]["at"] = json!("2026-11-26T17:00:00.123Z");
-    assert!(shape_only.is_valid(&fractional) && job_validator.is_valid(&fractional));
+    assert!(shape_only.is_valid(&fractional));
+    assert_job_validity(&job_validator, &fractional, true);
 
-    let mut bad_fp = base;
+    check_fingerprint_and_packet_boundaries(&job_validator, &base);
+}
+
+fn check_fingerprint_and_packet_boundaries(job_validator: &Validator, base: &Value) {
+    let mut bad_fp = base.clone();
     bad_fp["source_fingerprint"]["sha256"] = json!("sha256:short");
-    assert!(!job_validator.is_valid(&bad_fp));
+    assert_job_validity(job_validator, &bad_fp, false);
+
+    for bad_packet in [
+        "short",
+        "A123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    ] {
+        let mut doc = base.clone();
+        doc["verdict"]["source_packets"][0]["sha256"] = json!(bad_packet);
+        assert_job_validity(job_validator, &doc, false);
+    }
+
+    let mut max_mtime = base.clone();
+    max_mtime["source_fingerprint"]["mtime_ns"] = json!(u64::MAX);
+    assert_job_validity(job_validator, &max_mtime, true);
+
+    let mut over_mtime = base.clone();
+    over_mtime["source_fingerprint"]["mtime_ns"] =
+        serde_json::from_str("18446744073709551616").unwrap();
+    assert_job_validity(job_validator, &over_mtime, false);
+
+    let mut dup_disp = base.clone();
+    dup_disp["facts"]["tracks"][0]["dispositions"] = json!(["default", "default"]);
+    assert_job_validity(job_validator, &dup_disp, false);
+}
+
+#[test]
+fn schemas_build_with_strict_format_validation() {
+    for name in [
+        "job-request-1.schema.json",
+        "job-1.schema.json",
+        "staging-record-1.schema.json",
+        "plan-report.schema.json",
+    ] {
+        let schema = read_json_file(&schemas_dir().join(name));
+        jsonschema::draft202012::options()
+            .should_validate_formats(true)
+            .should_ignore_unknown_formats(false)
+            .offline()
+            .build(&schema)
+            .unwrap_or_else(|e| panic!("{name} carries unknown format: {e}"));
+    }
+
+    let unknown_format = json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "integer",
+        "format": "uint64"
+    });
+    assert!(
+        jsonschema::draft202012::options()
+            .should_validate_formats(true)
+            .should_ignore_unknown_formats(false)
+            .offline()
+            .build(&unknown_format)
+            .is_err()
+    );
+}
+
+#[test]
+fn example_job_id_is_the_source_path_hash() {
+    let job = read_json_file(&schemas_dir().join("examples/job-1.json"));
+    let source = job["request"]["source"].as_str().unwrap();
+    let hex: String = Sha256::digest(source.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    assert_eq!(job["id"].as_str().unwrap(), &hex[..32]);
+}
+
+#[test]
+fn schema_refuses_regular_file_destination() {
+    let deadline = Deadline::new();
+    let temp = deadline.run(tempfile::tempdir).unwrap();
+    let file_out = temp.path().join("existing.txt");
+    let original = b"keep-me-intact\n";
+    deadline.run(|| fs::write(&file_out, original)).unwrap();
+
+    let (status, err) = invoke_schema_subcommand(&file_out);
+    assert!(!status.success(), "expected failure when --out is a file");
+    assert!(!err.trim().is_empty(), "expected diagnostic on stderr");
+    assert_eq!(deadline.run(|| fs::read(&file_out)).unwrap(), original);
 }

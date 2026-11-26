@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Lusoris <lusoris@pm.me>
 // SPDX-License-Identifier: EUPL-1.2
+use crate::pattern::{self, PACKET_SHA256};
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::BTreeMap;
 use torcul_policy::{Plan, TrackInfo, TrackKind};
 
@@ -97,10 +98,16 @@ pub struct PacketRecord {
     pub side_data: Box<[SideDataRecord]>,
 }
 
+fn deserialize_packet_sha256<'de, D: Deserializer<'de>>(input: D) -> Result<String, D::Error> {
+    pattern::matching(String::deserialize(input)?, PACKET_SHA256, "packet sha256")
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct PacketProof {
     pub count: u64,
     pub bytes: u64,
+    #[schemars(regex(pattern = PACKET_SHA256))]
+    #[serde(deserialize_with = "deserialize_packet_sha256")]
     pub sha256: String,
 }
 
@@ -222,7 +229,29 @@ impl VerifyReport {
 
 #[cfg(test)]
 mod tests {
-    use super::TimeBase;
+    use super::{PacketProof, TimeBase};
+
+    #[test]
+    fn packet_proof_serde_validates_sha256_pattern() {
+        let ok = serde_json::json!({
+            "count": 10,
+            "bytes": 100,
+            "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        });
+        assert!(serde_json::from_value::<PacketProof>(ok).is_ok());
+
+        for bad in [
+            "short",
+            "A123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        ] {
+            let doc = serde_json::json!({ "count": 1, "bytes": 1, "sha256": bad });
+            assert!(
+                serde_json::from_value::<PacketProof>(doc).is_err(),
+                "expected bad packet sha256 {bad} to fail"
+            );
+        }
+    }
 
     #[test]
     fn time_base_normalized_handles_min_extremes_and_signs() {

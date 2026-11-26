@@ -1,8 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Lusoris <lusoris@pm.me>
 // SPDX-License-Identifier: EUPL-1.2
-use crate::{Error, Result, error::fs};
+use crate::{
+    Error, Result,
+    error::fs,
+    pattern::{self, FINGERPRINT_SHA256},
+};
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
 #[cfg(feature = "ffmpeg")]
 use std::io::{Seek, SeekFrom, Write};
@@ -170,13 +174,24 @@ impl Seek for TimedFile {
     }
 }
 
+fn deserialize_fingerprint_sha256<'de, D: Deserializer<'de>>(
+    input: D,
+) -> std::result::Result<String, D::Error> {
+    pattern::matching(
+        String::deserialize(input)?,
+        FINGERPRINT_SHA256,
+        "fingerprint sha256",
+    )
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Fingerprint {
     pub dev: u64,
     pub ino: u64,
     pub size: u64,
-    pub mtime_ns: u128,
-    #[schemars(regex(pattern = r"^sha256:[0-9a-f]{64}$"))]
+    pub mtime_ns: u64,
+    #[schemars(regex(pattern = FINGERPRINT_SHA256))]
+    #[serde(deserialize_with = "deserialize_fingerprint_sha256")]
     pub sha256: String,
 }
 
@@ -185,7 +200,7 @@ pub(crate) struct FileStat {
     pub dev: u64,
     pub ino: u64,
     pub size: u64,
-    pub mtime_ns: u128,
+    pub mtime_ns: u64,
     pub nlink: u64,
 }
 
@@ -230,13 +245,18 @@ pub(crate) fn ensure_unchanged_stat(before: FileStat, after: FileStat) -> Result
     Ok(())
 }
 
+fn duration_to_mtime_ns(duration: Duration) -> Result<u64> {
+    u64::try_from(duration.as_nanos())
+        .map_err(|e| Error::Invalid(format!("mtime beyond u64 nanoseconds: {e}")))
+}
+
 fn stat_file(file: &File, deadline: Deadline) -> Result<FileStat> {
     let meta = fs("fstat fingerprint file", deadline.run(|| file.metadata()))?;
     let (dev, ino, nlink) = metadata_dev_ino_nlink(&meta)?;
-    let mtime_ns = fs("read file mtime", meta.modified())?
+    let duration = fs("read file mtime", meta.modified())?
         .duration_since(UNIX_EPOCH)
-        .map_err(|e| Error::Invalid(format!("mtime before epoch: {e}")))?
-        .as_nanos();
+        .map_err(|e| Error::Invalid(format!("mtime before epoch: {e}")))?;
+    let mtime_ns = duration_to_mtime_ns(duration)?;
     Ok(FileStat {
         dev,
         ino,

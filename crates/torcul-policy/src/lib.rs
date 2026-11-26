@@ -1,8 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Lusoris <lusoris@pm.me>
 // SPDX-License-Identifier: EUPL-1.2
 mod language;
+mod sets;
 mod types;
 pub use language::normalize_language;
+pub use sets::unique_set;
 use std::collections::BTreeSet;
 pub use types::*;
 

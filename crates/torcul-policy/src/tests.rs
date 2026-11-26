@@ -278,3 +278,33 @@ fn undetermined_trimmed_and_padded_known_codes() {
         assert!(p.warnings.is_empty(), "unexpected warnings for {known:?}");
     }
 }
+
+#[test]
+fn duplicate_dispositions_are_refused_by_serde() {
+    let valid = serde_json::json!({
+        "index": 0,
+        "kind": "Audio",
+        "codec": "eac3",
+        "language": "eng",
+        "title": null,
+        "dispositions": ["default", "forced"],
+        "attached_pic": false,
+    });
+    let parsed: TrackInfo = serde_json::from_value(valid).unwrap();
+    assert_eq!(parsed.dispositions.len(), 2);
+
+    let duplicate = serde_json::json!({
+        "index": 0,
+        "kind": "Audio",
+        "codec": "eac3",
+        "language": "eng",
+        "title": null,
+        "dispositions": ["default", "default"],
+        "attached_pic": false,
+    });
+    let err = serde_json::from_value::<TrackInfo>(duplicate).unwrap_err();
+    assert!(
+        err.to_string().contains("duplicate item in a set"),
+        "unexpected error: {err}"
+    );
+}
