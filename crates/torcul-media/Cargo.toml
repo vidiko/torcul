@@ -11,11 +11,12 @@ workspace = true
 
 [features]
 default = ["ffmpeg"]
-ffmpeg = ["dep:ffmpeg-next", "dep:mp4-atom", "dep:torcul-policy", "dep:tempfile"]
+ffmpeg = ["dep:ffmpeg-next", "dep:mp4-atom", "dep:tempfile"]
 
 [dependencies]
-torcul-policy = { workspace = true, optional = true }
+torcul-policy.workspace = true
 ffmpeg-next = { version = "=9.1.0", default-features = false, features = ["format", "codec"], optional = true }
+regex.workspace = true
 schemars.workspace = true
 serde.workspace = true
 thiserror.workspace = true

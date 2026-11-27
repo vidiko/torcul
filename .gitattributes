@@ -1,5 +1,7 @@
 # Tests load Python tools by path; keep LF checkout bytes on every platform (HISS-21).
 *.py text eol=lf
+# Schema drift tests compare generated and checked-in bytes on every platform.
+schemas/** text eol=lf
 
 # BEGIN praetor managed attributes (praetorctl adopt)
 # praetorctl audit hashes these files; keep their checkout bytes the same on every platform.

@@ -7,9 +7,13 @@ description: JSON Schema Draft 2020-12 contracts for torcul job requests, job re
 # JSON Schemas
 
 torcul publishes [JSON Schema Draft 2020-12](https://json-schema.org/draft/2020-12/schema)
-contracts for every JSON document it reads from callers or writes to disk. All
-four schema files live under `schemas/` and are generated from the Rust types
-through `schemars`. [Schema subcommand][schema-cmd] · [Schema tests][schema-test]
+contracts for four JSON documents: job requests (`torcul/job-request/1`), job
+state records (`torcul/job/1`), staging sidecars (`torcul/staging-record/1`)
+and plan reports (`torcul/plan-report`). The `--meta` fixture metadata manifest
+that `torcul plan` and `torcul remux` read has no published schema. All four
+schema files live under `schemas/` and are generated from the Rust types
+through `schemars`. [Metadata loader][report-src] ·
+[Schema subcommand][schema-cmd] · [Schema tests][schema-test]
 
 ## Regenerate and check schemas
 
@@ -25,7 +29,8 @@ Sample version 1 documents live in
 [`schemas/examples/job-1.json`][example-job]. The integration suite checks that
 checked-in schemas match generator output byte for byte, conform to the Draft
 2020-12 meta-schema, and accept or reject positive, negative and boundary
-documents. [Schema tests][schema-test] · [CI drift step][ci]
+documents across both JSON Schema and `serde`. [Schema tests][schema-test] ·
+[CI drift step][ci]
 
 ## Published schema files
 
@@ -52,30 +57,53 @@ documents. [Schema tests][schema-test] · [CI drift step][ci]
   (`0..=65535`). [Job types][job-crate] · [ADR-0002, decision 9][decision-9]
 - **Version 1 records grow only by optional fields.** `Job` omits
   `deny_unknown_fields` so `torcul/job/1` can gain optional fields without
-  breaking readers. Any incompatible change to field types, meanings or
-  required keys increments the trailing version number (for example
-  `torcul/job/2`). [Job types][job-crate] · [ADR-0002, decision 9][decision-9]
-- **Scalar invariants are encoded in the schema.** `Fingerprint.sha256` matches
-  `^sha256:[0-9a-f]{64}$`, `Job.id` matches `^[0-9a-f]{32}$`, and every `u32`
-  and `u64` field carries its exact `maximum`. `TrackRule.languages` requires
-  `minItems: 1`, and `serde` refuses an empty list too. [Media I/O][media-io] ·
+  breaking readers. `Job` embeds the request types (`JobRequest`, `Rule`,
+  `TrackRule` and `RequestTitle`), which refuse unknown keys
+  (`additionalProperties: false`), so a new request field is a new request
+  version and a new job version together (`torcul/job-request/2` and
+  `torcul/job/2`); fields outside `request` can still be added within
+  `torcul/job/1`. Any incompatible change to field types, meanings or required
+  keys increments the trailing version number. [Job types][job-crate] ·
+  [ADR-0002, decision 9][decision-9]
+- **Scalar, set and format invariants match across the schema and `serde`.**
+  `Fingerprint.sha256` matches `^sha256:[0-9a-f]{64}$`, `PacketProof.sha256`
+  matches `^[0-9a-f]{64}$`, `Job.id` matches `^[0-9a-f]{32}$`, and
+  `Transition.at` matches the RFC 3339 UTC timestamp shape; `serde` refuses the
+  same malformed strings, duplicate items in `TrackRule.languages` and
+  `TrackInfo.dispositions` (`uniqueItems: true`), and empty `TrackRule.languages`
+  or `Job.history` lists (`minItems: 1`). Every `u8`, `u16`, `u32`, `u64` and
+  `usize` field carries its exact `maximum` (`Fingerprint.mtime_ns` is `u64`),
+  and only standard Draft 2020-12 `format` values appear (`date-time`), so
+  strict validators that reject unknown formats accept all four files.
+  [Pattern checks][media-pattern] · [Media I/O][media-io] ·
+  [Media model][media-model] · [Unique sets][policy-sets] ·
   [Job types][job-crate] · [Schema generator][schema-cmd] ·
   [Schema tests][schema-test]
 - **Timestamps are checked without format validation.** `Transition.at`
   matches an RFC 3339 UTC pattern (`2026-11-26T17:00:07Z`, optional
-  fractional seconds), so any Draft 2020-12 validator refuses a malformed
-  shape. The pattern checks the shape only; enable format validation (in
-  the `jsonschema` crate, `should_validate_formats(true)`) to also refuse
+  fractional seconds), so `serde` and any Draft 2020-12 validator refuse a
+  malformed shape. The pattern checks the shape only; enable format validation
+  (in the `jsonschema` crate, `should_validate_formats(true)`) to also refuse
   impossible dates such as month 13 through `format: "date-time"`.
   [Job types][job-crate] · [Schema tests][schema-test]
-- **Some fields depend on the job state.** In `applying` and `rolling_back`,
-  `source_fingerprint` and `staged_fingerprint` must be set, because a
-  restart reads both inodes from them; `rolling_back` also needs
-  `rollback_path`. [Job types][job-crate] ·
-  [ADR-0002, decision 15][decision-15]
-- **A plan-report entry has exactly one outcome.** Both `plan` and `error`
-  are always present; exactly one of them is `null`. [Plan report][report-src]
-  · [Schema tests][schema-test]
+- **State-dependent fields are enforced from one table.** Both `job-1.schema.json`
+  (`allOf`) and `Job` deserialization read `STATE_RULES` so every state below
+  requires its non-null fields ([Job types][job-crate] ·
+  [Schema tests][schema-test]):
+
+  | `Job.state` | Required non-null fields | ADR-0002 decision |
+  | :--- | :--- | :--- |
+  | `verified`, `applying`, `applied`, `rolling_back`, `held` | `staged_fingerprint` | [Decision 13][decision-13] (apply compares the staged file with the verdict's fingerprint) and [decision 12][decision-12] (applied-index entry liveness reads it) |
+  | `applying`, `applied`, `rolling_back` | `source_fingerprint` | [Decision 15][decision-15] (restart inodes) and [decision 14][decision-14] (rollback step 1 checks the rollback copy) |
+  | `applied`, `rolling_back` | `applied_fingerprint` | [Decision 14][decision-14] (rollback steps 1 and 4) |
+  | `rolling_back` | `rollback_path` | [Decision 14][decision-14] (step 2 records the library path) |
+  | `held` | `held` | [Decision 15][decision-15] (records `held` with the inodes found) |
+  | `failed` | `failure` | [Decision 14][decision-14] (a refusal records `failed`) |
+
+- **Every plan-report entry holds a plan.** Every entry holds a non-null `plan`
+  and `error: null`, and both keys are always present (`torcul plan --json`
+  bails before writing if any file fails planning). [CLI entrypoint][cli-main] ·
+  [Plan report][report-src] · [Schema tests][schema-test]
 
 ## Drift checks
 
@@ -98,9 +126,15 @@ drift` step in CI fail if any schema file is stale or untracked.
 [job-crate]: ../../crates/torcul-job/src/lib.rs
 [decision-9]: ../adr/0002-pipeline-architecture.md#decision-9-trigger-and-state-boundary
 [decision-12]: ../adr/0002-pipeline-architecture.md#decision-12-staging-output
+[decision-13]: ../adr/0002-pipeline-architecture.md#decision-13-verification
+[decision-14]: ../adr/0002-pipeline-architecture.md#decision-14-apply-and-rollback
 [decision-15]: ../adr/0002-pipeline-architecture.md#decision-15-restart-and-yield
+[cli-main]: ../../crates/torcul-cli/src/main.rs
 [staging-src]: ../../crates/torcul-cli/src/staging.rs
 [report-src]: ../../crates/torcul-cli/src/report.rs
 [media-io]: ../../crates/torcul-media/src/io.rs
+[media-model]: ../../crates/torcul-media/src/model.rs
+[media-pattern]: ../../crates/torcul-media/src/pattern.rs
+[policy-sets]: ../../crates/torcul-policy/src/sets.rs
 [cli-guide]: ../guides/track-policy-cli.md
 [cli-test]: ../../crates/torcul-cli/tests/cli.rs

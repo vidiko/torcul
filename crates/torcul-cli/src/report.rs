@@ -47,20 +47,21 @@ pub fn title<'a>(path: &Path, meta: &'a Metadata) -> Result<&'a TitleMeta> {
         .with_context(|| format!("no metadata entry for {name}"))
 }
 
-/// Each entry carries exactly one outcome: a plan with `error: null`, or an error with
-/// `plan: null`. Both keys are always written.
-fn one_outcome(schema: &mut Schema) {
-    let is_set = json!({ "not": { "type": "null" } });
-    let is_null = json!({ "type": "null" });
-    let branches = json!([
-        { "properties": { "plan": is_set, "error": is_null }, "required": ["plan", "error"] },
-        { "properties": { "plan": is_null, "error": is_set }, "required": ["plan", "error"] },
-    ]);
-    schema.insert("oneOf".to_owned(), branches);
+/// `torcul plan --json` writes only when every file plans (`main.rs` bails first), so every
+/// persisted entry holds a non-null `plan` and `error: null`.
+fn planned_entry(schema: &mut Schema) {
+    let branch = json!([{
+        "properties": {
+            "plan": { "not": { "type": "null" } },
+            "error": { "type": "null" },
+        },
+        "required": ["plan", "error"],
+    }]);
+    schema.insert("allOf".to_owned(), branch);
 }
 
 #[derive(Serialize, JsonSchema)]
-#[schemars(transform = one_outcome)]
+#[schemars(transform = planned_entry)]
 pub struct FileReport {
     pub path: PathBuf,
     pub plan: Option<Plan>,

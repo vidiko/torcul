@@ -53,7 +53,8 @@
       "type": "array",
       "items": {
         "$ref": "#/$defs/Transition"
-      }
+      },
+      "minItems": 1
     },
     "id": {
       "description": "First 32 lowercase hex digits of the SHA-256 of the canonical source path.",
@@ -137,7 +138,38 @@
         "properties": {
           "state": {
             "enum": [
+              "verified",
               "applying",
+              "applied",
+              "rolling_back",
+              "held"
+            ]
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "properties": {
+          "staged_fingerprint": {
+            "not": {
+              "type": "null"
+            }
+          }
+        },
+        "required": [
+          "staged_fingerprint"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "enum": [
+              "applying",
+              "applied",
               "rolling_back"
             ]
           }
@@ -152,16 +184,37 @@
             "not": {
               "type": "null"
             }
-          },
-          "staged_fingerprint": {
+          }
+        },
+        "required": [
+          "source_fingerprint"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "enum": [
+              "applied",
+              "rolling_back"
+            ]
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "properties": {
+          "applied_fingerprint": {
             "not": {
               "type": "null"
             }
           }
         },
         "required": [
-          "source_fingerprint",
-          "staged_fingerprint"
+          "applied_fingerprint"
         ]
       }
     },
@@ -188,6 +241,58 @@
         },
         "required": [
           "rollback_path"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "enum": [
+              "held"
+            ]
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "properties": {
+          "held": {
+            "not": {
+              "type": "null"
+            }
+          }
+        },
+        "required": [
+          "held"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "enum": [
+              "failed"
+            ]
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "properties": {
+          "failure": {
+            "not": {
+              "type": "null"
+            }
+          }
+        },
+        "required": [
+          "failure"
         ]
       }
     }
@@ -223,8 +328,8 @@
       "properties": {
         "chapters": {
           "type": "integer",
-          "format": "uint",
           "default": 0,
+          "maximum": 18446744073709551615,
           "minimum": 0
         },
         "container": {
@@ -247,19 +352,17 @@
       "properties": {
         "dev": {
           "type": "integer",
-          "format": "uint64",
           "maximum": 18446744073709551615,
           "minimum": 0
         },
         "ino": {
           "type": "integer",
-          "format": "uint64",
           "maximum": 18446744073709551615,
           "minimum": 0
         },
         "mtime_ns": {
           "type": "integer",
-          "format": "uint128",
+          "maximum": 18446744073709551615,
           "minimum": 0
         },
         "sha256": {
@@ -268,7 +371,6 @@
         },
         "size": {
           "type": "integer",
-          "format": "uint64",
           "maximum": 18446744073709551615,
           "minimum": 0
         }
@@ -291,7 +393,6 @@
             "integer",
             "null"
           ],
-          "format": "uint64",
           "maximum": 18446744073709551615,
           "minimum": 0
         },
@@ -301,7 +402,6 @@
             "integer",
             "null"
           ],
-          "format": "uint64",
           "maximum": 18446744073709551615,
           "minimum": 0
         }
@@ -318,7 +418,6 @@
         "rollback_days": {
           "description": "Days to retain the swapped-out original as a rollback copy; defaults to 7.",
           "type": "integer",
-          "format": "uint16",
           "default": 7,
           "maximum": 65535,
           "minimum": 0
@@ -431,12 +530,12 @@
       "properties": {
         "attachments": {
           "type": "integer",
-          "format": "uint",
+          "maximum": 18446744073709551615,
           "minimum": 0
         },
         "chapters": {
           "type": "integer",
-          "format": "uint",
+          "maximum": 18446744073709551615,
           "minimum": 0
         },
         "streams": {
@@ -463,18 +562,17 @@
       "properties": {
         "bytes": {
           "type": "integer",
-          "format": "uint64",
           "maximum": 18446744073709551615,
           "minimum": 0
         },
         "count": {
           "type": "integer",
-          "format": "uint64",
           "maximum": 18446744073709551615,
           "minimum": 0
         },
         "sha256": {
-          "type": "string"
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
         }
       },
       "required": [
@@ -502,12 +600,12 @@
           "prefixItems": [
             {
               "type": "integer",
-              "format": "uint",
+              "maximum": 18446744073709551615,
               "minimum": 0
             },
             {
               "type": "integer",
-              "format": "uint",
+              "maximum": 18446744073709551615,
               "minimum": 0
             }
           ]
@@ -588,22 +686,22 @@
       "properties": {
         "attachment": {
           "type": "integer",
-          "format": "uint",
+          "maximum": 18446744073709551615,
           "minimum": 0
         },
         "audio": {
           "type": "integer",
-          "format": "uint",
+          "maximum": 18446744073709551615,
           "minimum": 0
         },
         "subtitle": {
           "type": "integer",
-          "format": "uint",
+          "maximum": 18446744073709551615,
           "minimum": 0
         },
         "video": {
           "type": "integer",
-          "format": "uint",
+          "maximum": 18446744073709551615,
           "minimum": 0
         }
       },
@@ -622,12 +720,12 @@
         },
         "source": {
           "type": "integer",
-          "format": "uint",
+          "maximum": 18446744073709551615,
           "minimum": 0
         },
         "staging": {
           "type": "integer",
-          "format": "uint",
+          "maximum": 18446744073709551615,
           "minimum": 0
         }
       },
@@ -642,7 +740,7 @@
       "properties": {
         "index": {
           "type": "integer",
-          "format": "uint",
+          "maximum": 18446744073709551615,
           "minimum": 0
         },
         "keep": {
@@ -683,7 +781,7 @@
         },
         "index": {
           "type": "integer",
-          "format": "uint",
+          "maximum": 18446744073709551615,
           "minimum": 0
         },
         "kind": {

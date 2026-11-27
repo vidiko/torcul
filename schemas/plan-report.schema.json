@@ -29,7 +29,7 @@
           ]
         }
       },
-      "oneOf": [
+      "allOf": [
         {
           "properties": {
             "error": {
@@ -39,22 +39,6 @@
               "not": {
                 "type": "null"
               }
-            }
-          },
-          "required": [
-            "plan",
-            "error"
-          ]
-        },
-        {
-          "properties": {
-            "error": {
-              "not": {
-                "type": "null"
-              }
-            },
-            "plan": {
-              "type": "null"
             }
           },
           "required": [
@@ -86,12 +70,12 @@
           "prefixItems": [
             {
               "type": "integer",
-              "format": "uint",
+              "maximum": 18446744073709551615,
               "minimum": 0
             },
             {
               "type": "integer",
-              "format": "uint",
+              "maximum": 18446744073709551615,
               "minimum": 0
             }
           ]
@@ -117,7 +101,7 @@
       "properties": {
         "index": {
           "type": "integer",
-          "format": "uint",
+          "maximum": 18446744073709551615,
           "minimum": 0
         },
         "keep": {

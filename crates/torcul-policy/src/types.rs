@@ -30,6 +30,7 @@ pub struct TrackInfo {
     pub codec: String,
     pub language: Option<String>,
     pub title: Option<String>,
+    #[serde(deserialize_with = "crate::unique_set")]
     pub dispositions: BTreeSet<String>,
     pub attached_pic: bool,
 }

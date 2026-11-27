@@ -183,6 +183,10 @@ jobs:
         shell: bash
         run: cargo test -p torcul-media --no-default-features --lib --locked
 
+      - name: Run FFmpeg-free job contract tests
+        shell: bash
+        run: cargo test -p torcul-policy -p torcul-job --locked
+
       - name: Prove non-Unix I/O tests exist and pass
         shell: bash
         run: |
