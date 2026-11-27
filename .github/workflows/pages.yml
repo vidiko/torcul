@@ -62,7 +62,8 @@ jobs:
         run: |
           python3 -m venv "$RUNNER_TEMP/docs"
           "$RUNNER_TEMP/docs/bin/python" -m pip install \
-            --require-hashes --only-binary=:all: -r docs/requirements.txt
+            --require-hashes --only-binary=:all: \
+            -c docs/requirements.in -r docs/requirements.txt
       - name: Test the docs hooks
         run: |
           "$RUNNER_TEMP/docs/bin/python" -I -B docs/hooks/test_repo_links.py .
