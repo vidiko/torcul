@@ -60,9 +60,36 @@ jobs:
           persist-credentials: false
       - name: Install the documentation tools
         run: |
+          # Direct input: one exact name==version pin per meaningful line, no
+          # ranges, wildcards or empty file. uv validates the version syntax.
+          awk '
+            /^[[:space:]]*(#|$)/ { next }
+            /^[A-Za-z0-9][A-Za-z0-9._-]*==[A-Za-z0-9][A-Za-z0-9._+!-]*$/ { n++; next }
+            { print FILENAME ":" FNR ": not one exact name==version pin: " $0; bad = 1 }
+            END { if (!n) { print "no pins found"; bad = 1 } exit bad }
+          ' docs/requirements.in
+          # Bootstrap the lock compiler from a hash-checked wheel.
+          python3 -m venv "$RUNNER_TEMP/uv"
+          printf '%s\n' 'uv==0.13.10 --hash=sha256:7cc9c41b43d583e34c781fd3446405b06e9c5fa2db468ce2a534d353db6429e5' \
+            > "$RUNNER_TEMP/uv-bootstrap.txt"
+          "$RUNNER_TEMP/uv/bin/python" -m pip install \
+            --require-hashes --only-binary=:all: -r "$RUNNER_TEMP/uv-bootstrap.txt"
+          # Recompile in a scratch copy with the command from the lock header,
+          # then require the checked-in lock to match it exactly.
+          scratch=$(mktemp -d -p "$RUNNER_TEMP")
+          cp docs/requirements.in docs/requirements.txt "$scratch"
+          (
+            cd "$scratch"
+            PATH="$RUNNER_TEMP/uv/bin:$PATH"
+            uv pip compile --universal --generate-hashes --python-version=3.11 requirements.in --output-file=requirements.txt
+          )
+          diff -u docs/requirements.txt "$scratch/requirements.txt"
+          # Install only from the verified lock. --ignore-installed stops
+          # packages already present from masking an omitted or conflicting pin.
           python3 -m venv "$RUNNER_TEMP/docs"
           "$RUNNER_TEMP/docs/bin/python" -m pip install \
-            --require-hashes --only-binary=:all: -r docs/requirements.txt
+            --require-hashes --only-binary=:all: --ignore-installed \
+            -r docs/requirements.txt
       - name: Test the docs hooks
         run: |
           "$RUNNER_TEMP/docs/bin/python" -I -B docs/hooks/test_repo_links.py .
