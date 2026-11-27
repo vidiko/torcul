@@ -61,9 +61,14 @@ jobs:
       - name: Install the documentation tools
         run: |
           python3 -m venv "$RUNNER_TEMP/docs"
+          # Argument order matters: the hashed lock must come first, then the
+          # direct source pins as a second -r. Reversing them rejects even a
+          # matching pin. -c would silently accept a pin missing from the lock.
+          # --ignore-installed stops packages already present from masking an
+          # omitted or conflicting pin.
           "$RUNNER_TEMP/docs/bin/python" -m pip install \
-            --require-hashes --only-binary=:all: \
-            -c docs/requirements.in -r docs/requirements.txt
+            --require-hashes --only-binary=:all: --ignore-installed \
+            -r docs/requirements.txt -r docs/requirements.in
       - name: Test the docs hooks
         run: |
           "$RUNNER_TEMP/docs/bin/python" -I -B docs/hooks/test_repo_links.py .
